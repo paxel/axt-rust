@@ -1,7 +1,9 @@
 //! The rules of relations and extensions that every receiver checks (AXT
 //! `spec/fields.md`, sections 11.4 and 12.3).
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
+
+use crate::device_sets::Key;
 
 use crate::limits::{
     FIELDS_EXTENSION_DATA, FIELDS_EXTENSION_NAME, FIELDS_EXTENSIONS,
@@ -10,6 +12,8 @@ use crate::limits::{
     FIELDS_RELATIONS,
 };
 use crate::records::record_key;
+use crate::relation_index::{target_of, target_sender};
+use crate::schema::Schema;
 use crate::time_values::is_valid_time_value;
 use crate::value::Value;
 
@@ -133,6 +137,59 @@ pub(crate) fn extensions_problem(list: &[Value], path: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether `relation` goes to a receiver without the links of its record: a relation to
+/// a record of the sender's own set, named by `null` or one of `own_keys`, whose id is
+/// among the `shared` keys.
+fn to_shared(relation: &Value, shared: &HashSet<String>, own_keys: &BTreeSet<Key>) -> bool {
+    let target = target_of(relation);
+    let Some(Value::String(id)) = target.field("id") else {
+        return false;
+    };
+    let own = match target_sender(target) {
+        Ok(None) => true,
+        Ok(Some(key)) => own_keys.contains(&key),
+        Err(()) => false,
+    };
+    own && record_key(id).is_some_and(|key| shared.contains(&key))
+}
+
+/// The relations of `relations` that go to a receiver without the links of the record
+/// (`spec/shares.md`, section 19.1): those to records of the sender's own set, named by
+/// `null` or one of `own_keys`, whose ids are among the `shared` ids, compared as 128-bit
+/// values.
+pub(crate) fn shared_relations(
+    relations: &[Value],
+    shared: &HashSet<String>,
+    own_keys: &BTreeSet<Key>,
+) -> Vec<Value> {
+    let shared: HashSet<String> = shared.iter().filter_map(|id| record_key(id)).collect();
+    relations
+        .iter()
+        .filter(|relation| to_shared(relation, &shared, own_keys))
+        .cloned()
+        .collect()
+}
+
+/// `value`, a record of `schema`, without its links: every list of relations as
+/// [`shared_relations`] keeps it, every list of extensions empty, also nested in
+/// objects, lists and maps.
+///
+/// # Errors
+///
+/// The text of why `value` is no datum of `schema`.
+pub(crate) fn without_links(
+    schema: &Schema,
+    value: &Value,
+    shared: &HashSet<String>,
+    own_keys: &BTreeSet<Key>,
+) -> Result<Value, String> {
+    schema.map_record_lists(value, &|items, list| match items {
+        "axt.Relation" => Some(shared_relations(list, shared, own_keys)),
+        "axt.Extension" => Some(Vec::new()),
+        _ => None,
+    })
 }
 
 #[cfg(test)]
@@ -261,5 +318,105 @@ mod tests {
             extensions_problem(&[extension("org.example.A", &wrong)], "e").as_deref(),
             Some("e[0].data")
         );
+    }
+
+    fn record_target(id: &str, sender: Option<Key>) -> Value {
+        Value::Union {
+            index: 0,
+            branch: "axt.RelationRecordTarget".into(),
+            value: Box::new(record(vec![
+                ("id", s(id)),
+                (
+                    "sender",
+                    sender.map_or(Value::Null, |k| Value::Fixed(k.to_vec())),
+                ),
+                ("type", s("")),
+                ("text", s("")),
+            ])),
+        }
+    }
+
+    fn linked(id: &str, target: Value) -> Value {
+        record(vec![
+            ("id", s(id)),
+            ("kind", s("axt.related")),
+            ("target", target),
+            ("note", s("")),
+            ("start", Value::Null),
+            ("end", Value::Null),
+            ("attributes", Value::Map(BTreeMap::new())),
+        ])
+    }
+
+    const SHARED: &str = "00000001-5e55-4d0e-8a11-000000000001";
+    const OTHER: &str = "00000002-5e55-4d0e-8a11-000000000002";
+
+    #[test]
+    fn only_relations_to_shared_records_of_the_own_set_go_without_links() {
+        let own = [7; 32];
+        let relations = vec![
+            linked("r1", record_target(&SHARED.to_uppercase(), None)),
+            linked("r2", record_target(SHARED, Some(own))),
+            linked("r3", record_target(SHARED, Some([8; 32]))),
+            linked("r4", record_target(OTHER, None)),
+            linked(
+                "r5",
+                relation("", "", Value::Null, &[])
+                    .field("target")
+                    .unwrap()
+                    .clone(),
+            ),
+        ];
+        let shared = HashSet::from([SHARED.to_owned()]);
+        let kept = shared_relations(&relations, &shared, &BTreeSet::from([own]));
+        let ids: Vec<&str> = kept.iter().map(|r| text(r, "id")).collect();
+        assert_eq!(ids, ["r1", "r2"]);
+    }
+
+    #[test]
+    fn a_record_goes_without_its_links_also_nested() {
+        let relation_schema = crate::schemas::axt_schema_text("axt.Relation").unwrap();
+        let extension_schema = crate::schemas::axt_schema_text("axt.Extension").unwrap();
+        let schema = Schema::parse(&format!(
+            r#"{{"type":"record","name":"Holder","namespace":"org.example","fields":[
+            {{"name":"links","type":{{"type":"array","items":{relation_schema}}}}},
+            {{"name":"extensions","type":{{"type":"array","items":{extension_schema}}}}},
+            {{"name":"parts","type":{{"type":"map","values":{{"type":"record","name":"Part",
+              "fields":[{{"name":"links","type":{{"type":"array","items":"axt.Relation"}}}}]}}}}}},
+            {{"name":"maybe","type":["null","Part"]}}]}}"#
+        ))
+        .unwrap();
+        let links = || {
+            Value::Array(vec![
+                linked("r1", record_target(SHARED, None)),
+                linked("r2", record_target(OTHER, None)),
+            ])
+        };
+        let part = || record(vec![("links", links())]);
+        let value = record(vec![
+            ("links", links()),
+            (
+                "extensions",
+                Value::Array(vec![extension(
+                    "org.example.A",
+                    &[0xc3, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+                )]),
+            ),
+            ("parts", Value::Map(BTreeMap::from([("p".into(), part())]))),
+            ("maybe", part()),
+        ]);
+        let shared = HashSet::from([SHARED.to_owned()]);
+        let without = without_links(&schema, &value, &shared, &BTreeSet::new()).unwrap();
+        let only_shared = Value::Array(vec![linked("r1", record_target(SHARED, None))]);
+        assert_eq!(without.field("links"), Some(&only_shared));
+        assert_eq!(without.field("extensions"), Some(&Value::Array(vec![])));
+        let nested = record(vec![("links", only_shared)]);
+        assert_eq!(
+            without.field("parts"),
+            Some(&Value::Map(BTreeMap::from([("p".into(), nested.clone())])))
+        );
+        assert_eq!(without.field("maybe"), Some(&nested));
+        // The value encodes as before.
+        assert!(schema.encode_single_object(&without).is_ok());
     }
 }

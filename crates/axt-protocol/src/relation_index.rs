@@ -177,13 +177,6 @@ pub(crate) fn target_sender(target: &Value) -> Result<Option<Key>, ()> {
 
 /// The relations with a record target in `value`, a record of `schema`, in the order of
 /// the encoding.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the relation index is written by the files of axtrs-11"
-    )
-)]
 pub(crate) fn record_targets(schema: &Schema, value: &Value) -> Vec<RecordTarget> {
     let found = RefCell::new(Vec::new());
     let rule = |met: Met<'_>, value: &Value, _: &str| match (met, value) {

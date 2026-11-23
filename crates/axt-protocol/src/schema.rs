@@ -124,6 +124,23 @@ impl Schema {
         avro::first_problem(&self.avro, value, path, rule)
     }
 
+    /// The top-level fields of this record schema that are arrays of records, each with
+    /// the full name of its items' record type, in the order of the schema.
+    pub(crate) fn record_lists(&self) -> Vec<(String, String)> {
+        // A parsed schema's names always resolve.
+        avro::record_lists(&self.avro).unwrap_or_default()
+    }
+
+    /// `value`, a datum of this schema, with the arrays of records that `map` replaces
+    /// (see [`avro::map_record_lists`]).
+    pub(crate) fn map_record_lists(
+        &self,
+        value: &Value,
+        map: &avro::ListMap<'_>,
+    ) -> Result<Value, String> {
+        avro::map_record_lists(&self.avro, value, map)
+    }
+
     /// The full name and the Parsing Canonical Form of every named type this schema
     /// defines, each written on its own, with what it refers to written out in full.
     pub(crate) fn named_forms(&self) -> Result<Vec<(String, String)>, String> {

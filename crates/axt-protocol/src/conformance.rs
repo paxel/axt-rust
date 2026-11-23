@@ -10,12 +10,13 @@ use sha2::{Digest, Sha256};
 
 use crate::bricks::{self, Kind as Brick};
 use crate::device_sets::{
-    self, DeviceChange, DeviceSetReceiver, JoinAction, KeptRecord, Key, KnownSender, Member,
-    RecordState,
+    self, DeviceChange, DeviceSetReceiver, JoinAction, KeptRecord, Key, KeyState, KnownSender,
+    Member, RecordState,
 };
 use crate::ed25519;
 use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
+use crate::file_reader;
 use crate::keys::{EncryptionSeed, SigningSeed};
 use crate::manifest;
 use crate::record_decoder;
@@ -34,7 +35,7 @@ use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClo
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
 pub const IMPLEMENTED_CATEGORIES: &[&str] = &[
-    "encoding", "bricks", "types", "time", "keys", "manifest", "records",
+    "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file",
 ];
 
 /// The version of the vector file format the adapter reads.
@@ -150,6 +151,10 @@ fn operation(op: &str) -> Option<Operation> {
         "fit" => fit,
         "apply" => apply,
         "relations" => relations,
+        "read_file" => read_file,
+        "choose_format" => choose_format,
+        "contact_key" => contact_key,
+        "resend_after_removal" => resend_after_removal,
         _ => return None,
     })
 }
@@ -993,6 +998,180 @@ fn fit(input: &Map<String, Json>) -> Result<Json, Failure> {
     ))
 }
 
+/// `read_file` (section 5.7): a file read as a reader whose user accepted its sender,
+/// that knows the sender by the key in `axt.sender` alone and holds no record of it yet.
+fn read_file(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let reader = object(input, "reader")?;
+    let manifest = envelope::decode_body(Kind::Manifest, &bytes(reader.get("manifest"))?)?;
+    let mut readers = BTreeMap::new();
+    if let Some(given) = reader.get("readers") {
+        let given = given
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("readers is not an object".into()))?;
+        for (name, text) in given {
+            let text = text.as_str().ok_or_else(|| {
+                Failure::BadRequest("readers is not an object of schema texts".into())
+            })?;
+            readers.insert(name.clone(), text.to_owned());
+        }
+    }
+    let (current, removed) = match reader.get("keys").and_then(Json::as_object) {
+        Some(own) => (keys(own.get("current"))?, keys(own.get("removed"))?),
+        None => (BTreeSet::new(), BTreeSet::new()),
+    };
+    let file = file_reader::check_file(&bytes(input.get("file"))?)?;
+    let mut receiver = DeviceSetReceiver {
+        senders: vec![KnownSender {
+            name: "sender".into(),
+            current: BTreeSet::from([file.sender]),
+            ..KnownSender::default()
+        }],
+        ..DeviceSetReceiver::default()
+    };
+    let outcome = receiver.receive_chain(&file.chain);
+    let chain = file
+        .chain
+        .iter()
+        .zip(&outcome)
+        .map(|(message, result)| {
+            let change = DeviceChange::decode(message)?;
+            Ok(json!({
+                "kind": if change.is_add() { "DEVICE_ADD" } else { "DEVICE_REMOVE" },
+                "signer": hex(&change.signer),
+                "device": hex(&change.device),
+                "result": result.code(),
+            }))
+        })
+        .collect::<Result<Vec<_>, Error>>()?;
+    let manifest_state = match &file.manifest {
+        None => "none",
+        Some(body) if manifest::check_manifest(body, 1).is_ok() => "used",
+        Some(_) => "invalid",
+    };
+    let records: Vec<Json> = if receiver.state_of(&file.sender) == KeyState::Removed {
+        file.records
+            .iter()
+            .map(|message| {
+                let (id, version) = message.record();
+                json!({"id": id, "version": version, "result": "SENDER_REMOVED"})
+            })
+            .collect()
+    } else {
+        let reader = file_reader::FileReader {
+            manifest: &manifest,
+            readers: &readers,
+            current: &current,
+            removed: &removed,
+        };
+        file_reader::read_file_records(
+            &file,
+            reader,
+            &mut HashMap::new(),
+            &mut HashMap::new(),
+            &RecordPolicy::default(),
+        )
+        .into_iter()
+        .map(|read| {
+            json!({
+                "id": read.result.id,
+                "version": read.result.version,
+                "result": read.result.result.as_str(),
+            })
+        })
+        .collect()
+    };
+    Ok(accept(json!({
+        "sender": hex(&file.sender),
+        "chain": chain,
+        "manifest": manifest_state,
+        "records": records,
+    })))
+}
+
+/// A list of integers.
+fn integers(value: Option<&Json>, name: &str) -> Result<Vec<i64>, Failure> {
+    value
+        .and_then(Json::as_array)
+        .and_then(|list| list.iter().map(Json::as_i64).collect::<Option<Vec<_>>>())
+        .ok_or_else(|| Failure::BadRequest(format!("{name} is not a list of integers")))
+}
+
+/// `choose_format` (section 5.6): the highest envelope format both apps read, or `null`.
+fn choose_format(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let theirs: BTreeSet<i64> = integers(input.get("theirs"), "theirs")?
+        .into_iter()
+        .collect();
+    let common = integers(input.get("own"), "own")?
+        .into_iter()
+        .filter(|f| theirs.contains(f))
+        .max();
+    Ok(accept(json!({"format": common})))
+}
+
+/// `contact_key` (section 5.6): the key to which a sender offers (protocol.md, section
+/// 9.1): the last key that sent a valid message other than a change of devices or a
+/// manifest, of those that are current and whose manifest the sender holds; otherwise
+/// every such key.
+fn contact_key(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let current = keys(input.get("current"))?;
+    let manifests = keys(input.get("manifests"))?;
+    let got = input
+        .get("got")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("got is no list".into()))?;
+    let mut last = None;
+    for message in got {
+        let message = message
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("a message of got is no object".into()))?;
+        let message_key = key(message.get("key").unwrap_or(&Json::Null))?;
+        let kind = message.get("kind").and_then(Json::as_str);
+        if !current.contains(&message_key)
+            || !manifests.contains(&message_key)
+            || matches!(kind, Some("DEVICE_ADD" | "DEVICE_REMOVE" | "MANIFEST"))
+        {
+            continue;
+        }
+        last = Some(message_key);
+    }
+    let chosen: Vec<String> = match last {
+        Some(last) => vec![hex(&last)],
+        None => current
+            .iter()
+            .filter(|k| manifests.contains(*k))
+            .map(|k| hex(k))
+            .collect(),
+    };
+    Ok(accept(json!({"keys": chosen})))
+}
+
+/// `resend_after_removal` (section 5.6): the ids of the records a sender sends again,
+/// whose only outcomes are of removed keys, or that have none (protocol.md, sections 7.4
+/// and 11).
+fn resend_after_removal(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let removed = keys(input.get("removed"))?;
+    let records = input
+        .get("records")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("records is no list".into()))?;
+    let mut ids = Vec::new();
+    for record in records {
+        let outcomes = match record.get("outcomes") {
+            None | Some(Json::Null) => Map::new(),
+            Some(Json::Object(outcomes)) => outcomes.clone(),
+            Some(_) => return Err(Failure::BadRequest("outcomes is no object".into())),
+        };
+        let mut all_removed = true;
+        for name in outcomes.keys() {
+            all_removed &= removed.contains(&key(&json!(name))?);
+        }
+        if all_removed {
+            ids.push(record.get("id").cloned().unwrap_or(Json::Null));
+        }
+    }
+    Ok(accept(json!({"ids": ids})))
+}
+
 /// The member `name` of the input as an object.
 fn object<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a Map<String, Json>, Failure> {
     input
@@ -1102,7 +1281,7 @@ mod tests {
         assert_eq!(
             answer["output"]["categories"],
             json!([
-                "encoding", "bricks", "types", "time", "keys", "manifest", "records"
+                "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file"
             ])
         );
     }
@@ -1494,5 +1673,43 @@ mod tests {
             json!({"manifest": body, "schema": "\"int\"", "languages": [1]}),
         );
         assert!(unreadable["failure"].is_string());
+    }
+
+    #[test]
+    fn the_format_both_read_the_contact_key_and_what_is_sent_again() {
+        assert_eq!(
+            ask("choose_format", json!({"own": [1, 2, 3], "theirs": [3, 1]})),
+            json!({"id": "t", "output": {"accept": {"format": 3}}})
+        );
+        assert_eq!(
+            ask("choose_format", json!({"own": [1], "theirs": [2]})),
+            json!({"id": "t", "output": {"accept": {"format": null}}})
+        );
+        let (a, b, c) = ("aa".repeat(32), "bb".repeat(32), "cc".repeat(32));
+        let got = |messages: Json| {
+            ask(
+                "contact_key",
+                json!({"current": [b, a, c], "manifests": [a, b], "got": messages}),
+            )["output"]["accept"]["keys"]
+                .clone()
+        };
+        assert_eq!(got(json!([])), json!([a, b]));
+        assert_eq!(
+            got(
+                json!([{"key": b, "kind": "DATA"}, {"key": a, "kind": "MANIFEST"},
+                       {"key": c, "kind": "DATA"}])
+            ),
+            json!([b])
+        );
+        let answer = ask(
+            "resend_after_removal",
+            json!({"removed": [a], "records": [
+                {"id": "x", "outcomes": {a.clone(): "APPLIED"}},
+                {"id": "y", "outcomes": {a.clone(): "APPLIED", b.clone(): "APPLIED"}},
+                {"id": "z", "outcomes": {}},
+            ]}),
+        );
+        assert_eq!(answer["output"]["accept"]["ids"], json!(["x", "z"]));
+        assert!(ask("contact_key", json!({"current": [], "manifests": []}))["failure"].is_string());
     }
 }

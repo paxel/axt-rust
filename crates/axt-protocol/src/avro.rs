@@ -739,6 +739,114 @@ fn walk(
     Ok(None)
 }
 
+/// What replaces an array of records: given the full name of the items' record type and
+/// the items, the new items, or `None` to look inside them.
+pub(crate) type ListMap<'a> = dyn Fn(&str, &[Value]) -> Option<Vec<Value>> + 'a;
+
+/// The top-level fields of `schema`, a record schema, that are arrays of records, each
+/// with the full name of its items' record type; none for another schema.
+pub(crate) fn record_lists(schema: &AvroSchema) -> Result<Vec<(String, String)>, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    let names = resolved.get_names();
+    let AvroSchema::Record(record) = resolve(schema, names)? else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for field in &record.fields {
+        if let AvroSchema::Array(array) = resolve(&field.schema, names)?
+            && let AvroSchema::Record(items) = resolve(&array.items, names)?
+        {
+            out.push((field.name.clone(), items.name.fullname(None)));
+        }
+    }
+    Ok(out)
+}
+
+/// `value`, a datum of `schema`, with every array of records that `map` replaces: `map`
+/// gets the full name of the items' record type and the items, and gives the new items,
+/// or `None` to look inside them; also nested in records, arrays, maps and unions.
+pub(crate) fn map_record_lists(
+    schema: &AvroSchema,
+    value: &Value,
+    map: &ListMap<'_>,
+) -> Result<Value, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    map_lists(schema, value, resolved.get_names(), map)
+}
+
+fn map_lists(
+    schema: &AvroSchema,
+    value: &Value,
+    names: &NamesRef,
+    map: &ListMap<'_>,
+) -> Result<Value, String> {
+    let schema = resolve(schema, names)?;
+    Ok(match (schema, value) {
+        (AvroSchema::Record(record), Value::Record(fields)) => Value::Record(
+            fields
+                .iter()
+                .map(|(name, inner)| {
+                    let inner = match record.fields.iter().find(|f| f.name == *name) {
+                        Some(field) => map_lists(&field.schema, inner, names, map)?,
+                        None => inner.clone(),
+                    };
+                    Ok((name.clone(), inner))
+                })
+                .collect::<Result<_, String>>()?,
+        ),
+        (AvroSchema::Array(array), Value::Array(items)) => {
+            if let AvroSchema::Record(record) = resolve(&array.items, names)?
+                && let Some(mapped) = map(&record.name.fullname(None), items)
+            {
+                return Ok(Value::Array(mapped));
+            }
+            Value::Array(
+                items
+                    .iter()
+                    .map(|item| map_lists(&array.items, item, names, map))
+                    .collect::<Result<_, String>>()?,
+            )
+        }
+        (AvroSchema::Map(inner), Value::Map(entries)) => Value::Map(
+            entries
+                .iter()
+                .map(|(key, item)| Ok((key.clone(), map_lists(&inner.types, item, names, map)?)))
+                .collect::<Result<_, String>>()?,
+        ),
+        (
+            AvroSchema::Union(union),
+            Value::Union {
+                index,
+                branch,
+                value: inner,
+            },
+        ) => {
+            let schema = usize::try_from(*index)
+                .ok()
+                .and_then(|i| union.variants().get(i))
+                .ok_or_else(|| format!("no branch {index}"))?;
+            Value::Union {
+                index: *index,
+                branch: branch.clone(),
+                value: Box::new(map_lists(schema, inner, names, map)?),
+            }
+        }
+        (AvroSchema::Union(_), Value::Null) => Value::Null,
+        (AvroSchema::Union(union), _) => {
+            // The union of null and one other type holds the value of that type.
+            match union
+                .variants()
+                .iter()
+                .find(|s| !matches!(s, AvroSchema::Null))
+            {
+                Some(branch) => map_lists(branch, value, names, map)?,
+                None => value.clone(),
+            }
+        }
+        _ => value.clone(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -5,10 +5,12 @@
 
 mod avro;
 mod bricks;
+mod container;
 mod device_sets;
 mod ed25519;
 pub mod envelope;
 pub mod error;
+mod file_reader;
 mod iregexp;
 pub mod keys;
 mod limits;
@@ -36,8 +38,12 @@ pub use envelope::{
     Envelope, Kind, MAX_MESSAGE_BYTES, RecordRef, decode_body, decode_message, encode_message,
 };
 pub use error::{Error, ErrorCode};
+pub use file_reader::{FileRecordResult, RecordResult};
 pub use keys::{EncryptionSeed, SigningSeed};
-pub use node::{AxtNode, Link, RecordAddress, RecordChange, Store, new_record_id};
+pub use node::{
+    AxtNode, Clock, FilePreview, FileResult, Link, NodeConfig, OutgoingRecord, RecordAddress,
+    RecordChange, Store, new_record_id,
+};
 pub use records::{DeleteWithLocalChanges, LocalChanges, Outcome, RecordPolicy};
 pub use schema::{Fingerprint, Schema};
 pub use type_description::TypeDescription;

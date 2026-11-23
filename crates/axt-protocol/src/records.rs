@@ -141,6 +141,39 @@ pub(crate) struct ElementMerge {
     pub(crate) own: HashMap<String, Schema>,
 }
 
+/// The top-level fields of `schema` that are lists merged per element: the lists of
+/// relations and of extensions.
+pub(crate) fn element_lists_of(schema: &Schema) -> HashMap<String, ElementKey> {
+    schema
+        .record_lists()
+        .into_iter()
+        .filter_map(|(field, items)| match items.as_str() {
+            "axt.Relation" => Some((field, ElementKey::Id)),
+            "axt.Extension" => Some((field, ElementKey::Name)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// What a receiver merges per element in a record of `schema`, with the extension types
+/// it knows: the `writers` it holds and its `readers`, its own schemas, by full name.
+pub(crate) fn element_merge_of<'a>(
+    schema: &Schema,
+    writers: impl IntoIterator<Item = &'a Schema>,
+    readers: HashMap<String, Schema>,
+) -> ElementMerge {
+    let mut writers: HashMap<[u8; 8], Schema> = writers
+        .into_iter()
+        .map(|s| (s.fingerprint().0, s.clone()))
+        .collect();
+    writers.extend(readers.values().map(|s| (s.fingerprint().0, s.clone())));
+    ElementMerge {
+        lists: element_lists_of(schema),
+        writers,
+        own: readers,
+    }
+}
+
 /// What a receiver holds of a record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HeldState {
@@ -159,6 +192,18 @@ impl HeldState {
             Self::Withdrawn => "withdrawn",
             Self::DeletedByUser => "deleted_by_user",
         }
+    }
+
+    /// The state the vectors write as `code`.
+    pub(crate) fn from_code(code: &str) -> Option<Self> {
+        [
+            Self::There,
+            Self::Tombstone,
+            Self::Withdrawn,
+            Self::DeletedByUser,
+        ]
+        .into_iter()
+        .find(|state| state.code() == code)
     }
 }
 
@@ -647,6 +692,36 @@ fn merge_extension(elements: &ElementMerge, taken: &Value, user: &Value, message
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_lists_merged_per_element_come_from_the_schema() {
+        let relation = crate::schemas::axt_schema_text("axt.Relation").unwrap();
+        let extension = crate::schemas::axt_schema_text("axt.Extension").unwrap();
+        let schema = Schema::parse(&format!(
+            r#"{{"type":"record","name":"T","namespace":"org.example","fields":[
+            {{"name":"links","type":{{"type":"array","items":{relation}}}}},
+            {{"name":"more","type":{{"type":"array","items":"axt.Relation"}}}},
+            {{"name":"extensions","type":{{"type":"array","items":{extension}}}}},
+            {{"name":"items","type":{{"type":"array","items":"string"}}}},
+            {{"name":"maybe","type":["null",{{"type":"array","items":"axt.Relation"}}]}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(
+            element_lists_of(&schema),
+            HashMap::from([
+                ("links".to_owned(), ElementKey::Id),
+                ("more".to_owned(), ElementKey::Id),
+                ("extensions".to_owned(), ElementKey::Name),
+            ])
+        );
+        let readers = HashMap::from([("org.example.T".to_owned(), schema.clone())]);
+        let other = Schema::parse(r#""string""#).unwrap();
+        let merge = element_merge_of(&schema, [&other], readers);
+        assert_eq!(merge.lists.len(), 3);
+        assert_eq!(merge.writers.len(), 2);
+        assert!(merge.own.contains_key("org.example.T"));
+        assert!(element_lists_of(&other).is_empty());
+    }
 
     const ID: &str = "3f2c8a5e-9b1d-4c7e-8a6f-2d4b5c6e7f80";
 

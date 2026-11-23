@@ -14,7 +14,7 @@ authors.workspace = true
 [features]
 # The answers of the conformance adapter (AXT spec/conformance.md, section 6). Only the
 # crate axt-conformance-adapter turns it on; it is not part of the public API.
-conformance = ["dep:miniz_oxide", "dep:jiff"]
+conformance = ["dep:jiff"]
 
 [dependencies]
 apache-avro = "0.23.0"
@@ -30,9 +30,9 @@ hkdf = "0.13.0"
 sha2 = "0.11.1"
 zeroize = "1.9.2"
 getrandom = "0.4.3"
-# Only for the conformance adapter: the deflated form of bytes in a vector
-# (spec/conformance.md, section 3.2).
-miniz_oxide = { version = "0.9.1", optional = true }
+# The deflate codec of AXT files (spec/envelope.md, section 4.2), and the deflated form of
+# bytes in a vector (spec/conformance.md, section 3.2).
+miniz_oxide = "0.9.1"
 # Only for the conformance adapter: the zone rules of the IANA time zone database, bundled
 # into the binary so that every platform reads the same rules (spec/time.md, section 6).
 jiff = { version = "1.0.2", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
