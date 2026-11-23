@@ -1,0 +1,12 @@
+# Rust
+target/
+
+# Conformance runs
+build/
+
+# Coverage reports
+coverage/
+
+# Fuzz crashes
+fuzz/artifacts/
+fuzz/corpus/

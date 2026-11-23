@@ -1,0 +1,18 @@
+[package]
+name = "axt-protocol-generate"
+description = "Generates Rust structs for AXT types from their descriptions, for use with axt-protocol."
+readme = "../../README.md"
+keywords = ["avro", "codegen", "axt"]
+categories = ["development-tools", "encoding"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+axt-protocol = { path = "../axt-protocol", version = "0.1.0" }
+
+[lints]
+workspace = true

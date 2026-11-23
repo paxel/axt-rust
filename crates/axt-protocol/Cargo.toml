@@ -1,0 +1,17 @@
+[package]
+name = "axt-protocol"
+description = "The Rust library of AXT (Avro eXchange Transfer), the open standard for small apps to exchange typed records. Conforms to AXT 0.2.0."
+readme = "../../README.md"
+keywords = ["avro", "sync", "interoperability"]
+categories = ["encoding", "network-programming"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
