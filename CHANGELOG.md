@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Writing AXT files of the records shared with one receiver, with the withdrawals it is owed, or whole for an app of the own user; a record goes to an app of another user without its links unless `OutgoingRecord::with_links` says a share lets them go along; versions are state stamps that keep rising after a restore from a backup ([axtrs-11](https://github.com/paxel/axt-rust/issues/11), [axtrs-13](https://github.com/paxel/axt-rust/issues/13)).
 - The user's own changes of received records are kept per field or for the whole record, as the app's `RecordPolicy` chooses; relations and extensions merge per element, and extensions of types the app does not know are carried unchanged ([axtrs-10](https://github.com/paxel/axt-rust/issues/10)).
 - Relations resolve across senders: `AxtNode::resolve` finds the record a relation points at, following the senders' device sets and joins, and `AxtNode::linked_from` lists the relations that point at a record ([axtrs-10](https://github.com/paxel/axt-rust/issues/10)).
+- `axt-protocol-generate` writes typed Rust structs for the types of descriptions, which convert to and from `Value`, and the eight example types of AXT 0.2.0 ship generated in `axt_protocol::examples` ([axtrs-14](https://github.com/paxel/axt-rust/issues/14)).
 
 ---
 

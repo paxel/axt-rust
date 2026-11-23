@@ -1,8 +1,14 @@
-//! `axt-protocol-generate`: Rust structs for the types of AXT descriptions.
+//! `axt-protocol-generate <description.json...> -o <file.rs>`: writes the Rust structs of
+//! the types of descriptions.
 
-fn main() {
-    println!(
-        "axt-protocol-generate for AXT {}",
-        axt_protocol::AXT_VERSION
-    );
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
+    let args: Vec<_> = std::env::args_os().skip(1).collect();
+    ExitCode::from(axt_protocol_generate::run(
+        &args,
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+        None,
+    ))
 }

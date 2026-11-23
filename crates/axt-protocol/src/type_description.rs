@@ -31,6 +31,19 @@ impl TypeDescription {
         Self::from_datum(bricks::description_from_json(json)?)
     }
 
+    /// The description of `text`, its JSON form as text, as [`TypeDescription::from_json`]
+    /// reads it.
+    ///
+    /// # Errors
+    ///
+    /// [`ErrorCode::DescriptionInvalid`] for text that is not JSON, and as
+    /// [`TypeDescription::from_json`].
+    pub fn from_json_text(text: &str) -> Result<Self, Error> {
+        let json: Json = serde_json::from_str(text)
+            .map_err(|e| Error::axt(ErrorCode::DescriptionInvalid, e.to_string()))?;
+        Self::from_json(&json)
+    }
+
     /// The description of `datum`, a decoded datum of `axt.Field`.
     pub(crate) fn from_datum(datum: Value) -> Result<Self, Error> {
         let root = Field::from_value(&datum)?;
@@ -133,6 +146,14 @@ mod tests {
             Schema::parse(t.schema_text()).unwrap().canonical_form(),
             t.schema().canonical_form()
         );
+    }
+
+    #[test]
+    fn a_description_is_read_from_its_text() {
+        let t = TypeDescription::from_json_text(&json().to_string()).unwrap();
+        assert_eq!(t.name(), "com.example.T");
+        let e = TypeDescription::from_json_text("{").unwrap_err();
+        assert_eq!(e.code(), Some(ErrorCode::DescriptionInvalid));
     }
 
     #[test]

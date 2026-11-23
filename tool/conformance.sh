@@ -2,7 +2,7 @@
 # Runs the conformance suite of the pinned AXT release against this library's adapter
 # (AXT spec/conformance.md, sections 6 and 7). The archive is checked by its SHA-256 and
 # its attestation before anything in it runs. Needs curl, gh (logged in, or GH_TOKEN set),
-# uv, python3 >= 3.11 and cargo.
+# uv, python3 >= 3.11, cargo and rustup (with the rustfmt of rust-toolchain.toml).
 #
 # Arguments are passed to the runner, e.g. --category encoding. Locally, AXT_PYTHON names a
 # Python that has the suite's dependencies (pyproject.toml of the release) in place of uv, and
@@ -40,6 +40,15 @@ tar -xzf "$ARCHIVE" -C suite --strip-components=1
 if [ -z "${AXT_PYTHON:-}" ]; then
   (cd suite && uv sync --frozen --no-dev --no-build)
 fi
+
+# The example types ship generated (crates/axt-protocol/src/examples.rs): generated again
+# from the release's descriptions, they must not differ. The generator is built and its
+# rustfmt found in "$root", so that both are of the toolchain of rust-toolchain.toml.
+(cd "$root" && cargo build --locked --release -p axt-protocol-generate)
+rustfmt=$(cd "$root" && rustup which rustfmt)
+(cd suite && RUSTFMT="$rustfmt" "$root/target/release/axt-protocol-generate" \
+  types/axt/example/v1/*.1.json -o "$work/examples.rs")
+diff -u "$root/crates/axt-protocol/src/examples.rs" "$work/examples.rs"
 
 (cd "$root" && cargo build --locked --release -p axt-conformance-adapter)
 adapter="$root/target/release/axt-conformance-adapter"

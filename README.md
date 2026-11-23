@@ -31,6 +31,14 @@ implement (`encoding`, `types`, `time`, `records`, `manifest`, `keys`, `protocol
 | `axt-protocol-generate`   | Generates Rust structs for the types of AXT descriptions    |
 | `axt-conformance-adapter` | The adapter of the AXT conformance suite (not published)    |
 
+## Typed structs
+
+`axt-protocol-generate <description.json...> -o <file.rs>` writes a Rust struct for the type of
+each description, in the JSON form of `spec/fields.md`, section 10.3; it converts to and from
+the library's `Value` (`From`/`TryFrom`) and carries its description as `DESCRIPTION`. The
+generated code depends on `axt-protocol` alone. The eight example types of AXT 0.2.0 ship
+generated in `axt_protocol::examples`.
+
 ## Platforms
 
 Native only: Linux, macOS, Windows, Android and iOS.
