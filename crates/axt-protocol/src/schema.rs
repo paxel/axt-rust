@@ -130,6 +130,12 @@ impl Schema {
         avro::named_forms(&self.avro)
     }
 
+    /// The full name of a named type, such as `axt.example.v1.Pet`, otherwise the type's
+    /// name, such as `string` or `array`.
+    pub(crate) fn type_name(&self) -> String {
+        avro::branch_name(&self.avro)
+    }
+
     /// The full name and the aliases, in full, of a record schema; `None` for another
     /// schema.
     pub(crate) fn record_names(&self) -> Option<(String, Vec<String>)> {

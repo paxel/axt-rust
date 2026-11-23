@@ -17,6 +17,7 @@ use crate::ed25519;
 use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
 use crate::keys::{EncryptionSeed, SigningSeed};
+use crate::manifest;
 use crate::record_decoder;
 use crate::schema::Schema;
 use crate::sealing;
@@ -27,7 +28,8 @@ use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClo
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types", "time", "keys"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] =
+    &["encoding", "bricks", "types", "time", "keys", "manifest"];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -138,6 +140,8 @@ fn operation(op: &str) -> Option<Operation> {
         "padded_length" => padded_length,
         "seal" => seal,
         "open" => open,
+        "check_manifest" => check_manifest,
+        "fit" => fit,
         _ => return None,
     })
 }
@@ -648,6 +652,31 @@ fn date_time_json(date_time: &DateTime) -> Json {
     })
 }
 
+/// `check_manifest` (section 5.4): the manifest of a valid body.
+fn check_manifest(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let format = integer(input, "envelope_format")?;
+    let manifest = manifest::check_manifest(&bytes(input.get("body"))?, format)?;
+    Ok(accept(json!({"manifest": value_json(&manifest)})))
+}
+
+/// `fit` (section 5.4): whether a type fits a manifest, and the purpose sentence shown.
+fn fit(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let languages = input
+        .get("languages")
+        .and_then(Json::as_array)
+        .and_then(|l| {
+            l.iter()
+                .map(|t| t.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| Failure::BadRequest("languages is not a list of strings".into()))?;
+    let decoded = envelope::decode_body(Kind::Manifest, &bytes(input.get("manifest"))?)?;
+    let result = manifest::fit(&decoded, string(input, "schema")?, &languages)?;
+    Ok(accept(
+        json!({"fits": result.fits, "purpose": result.purpose}),
+    ))
+}
+
 /// The member `name` of the input as an object.
 fn object<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a Map<String, Json>, Failure> {
     input
@@ -756,7 +785,7 @@ mod tests {
         let answer = ask("hello", json!({"format": 1}));
         assert_eq!(
             answer["output"]["categories"],
-            json!(["encoding", "bricks", "types", "time", "keys"])
+            json!(["encoding", "bricks", "types", "time", "keys", "manifest"])
         );
     }
 
@@ -1007,5 +1036,56 @@ mod tests {
         let mut wrong = form;
         wrong["sha256"] = json!(hex(&[0; 32]));
         assert!(bytes(Some(&wrong)).is_err());
+    }
+
+    #[test]
+    fn the_adapter_checks_manifests_and_fits() {
+        let schema = crate::schemas::axt_schema("axt.Manifest").unwrap();
+        let manifest = json!({
+            "revision": 1, "app_name": "cat-a-log", "app_url": null, "formats": [1],
+            "takes": [{
+                "type": "axt.example.v1.Pet", "min_version": 1, "max_version": null,
+                "purpose": "A Pet becomes an animal.", "purpose_translations": {},
+            }],
+            "any_type": null, "sends": null, "encryption_key": null, "relay": null,
+        });
+        let body = hex(&schema
+            .encode_single_object(&schema.datum_of_json(&manifest).unwrap())
+            .unwrap());
+        let ok = ask(
+            "check_manifest",
+            json!({"body": body, "envelope_format": 1}),
+        );
+        assert_eq!(ok["output"]["accept"]["manifest"], manifest);
+        let bad = ask(
+            "check_manifest",
+            json!({"body": body, "envelope_format": 2}),
+        );
+        assert_eq!(
+            bad["output"],
+            json!({"reject": {"error": "MANIFEST_INVALID"}})
+        );
+        let unreadable = ask(
+            "check_manifest",
+            json!({"body": body, "envelope_format": "1"}),
+        );
+        assert!(unreadable["failure"].is_string());
+        let fits = ask(
+            "fit",
+            json!({
+                "manifest": body,
+                "schema": r#"{"type":"record","name":"Pet","namespace":"axt.example.v1","fields":[]}"#,
+                "languages": ["de"],
+            }),
+        );
+        assert_eq!(
+            fits["output"],
+            json!({"accept": {"fits": true, "purpose": "A Pet becomes an animal."}})
+        );
+        let unreadable = ask(
+            "fit",
+            json!({"manifest": body, "schema": "\"int\"", "languages": [1]}),
+        );
+        assert!(unreadable["failure"].is_string());
     }
 }

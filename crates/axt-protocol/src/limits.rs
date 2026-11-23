@@ -30,8 +30,29 @@ pub(crate) const METADATA_PATTERN: usize = 1024;
 pub(crate) const METADATA_PATTERN_QUANTIFIER: u32 = 1000;
 /// `metadata.group_key`: the most bytes of a group key.
 pub(crate) const METADATA_GROUP_KEY: usize = 64;
+/// `manifest.body`: the most bytes of the body of a `MANIFEST`, single-object header
+/// included.
+pub(crate) const MANIFEST_BODY: usize = 1_048_576;
+/// `manifest.formats`: the most entries of `formats`.
+pub(crate) const MANIFEST_FORMATS: usize = 16;
+/// `manifest.takes`: the most entries of `takes`.
+pub(crate) const MANIFEST_TAKES: usize = 256;
+/// `manifest.sends`: the most entries of `sends`.
+pub(crate) const MANIFEST_SENDS: usize = 256;
+/// `manifest.full_name`: the most bytes of a full name in `takes` or `sends`.
+pub(crate) const MANIFEST_FULL_NAME: usize = 512;
+/// `manifest.app_name`: the most bytes of `app_name`.
+pub(crate) const MANIFEST_APP_NAME: usize = 256;
+/// `manifest.app_url`: the most bytes of `app_url`.
+pub(crate) const MANIFEST_APP_URL: usize = 2048;
+/// `manifest.purpose`: the most bytes of one purpose sentence.
+pub(crate) const MANIFEST_PURPOSE: usize = 512;
+/// `manifest.purpose_translations`: the most entries of one `purpose_translations`.
+pub(crate) const MANIFEST_PURPOSE_TRANSLATIONS: usize = 64;
 /// `manifest.language_tag`: the most characters of a language tag.
 pub(crate) const MANIFEST_LANGUAGE_TAG: usize = 35;
+/// `transports.relay_url`: the most bytes of the base URL of a relay.
+pub(crate) const TRANSPORTS_RELAY_URL: usize = 256;
 /// `protocol.error_field`: the most bytes of the field path of an error.
 pub(crate) const PROTOCOL_ERROR_FIELD: usize = 1024;
 /// `fields.depth`: the deepest typed fields nest.
@@ -87,7 +108,20 @@ mod tests {
                 u64::from(METADATA_PATTERN_QUANTIFIER),
             ),
             ("metadata.group_key", METADATA_GROUP_KEY as u64),
+            ("manifest.body", MANIFEST_BODY as u64),
+            ("manifest.formats", MANIFEST_FORMATS as u64),
+            ("manifest.takes", MANIFEST_TAKES as u64),
+            ("manifest.sends", MANIFEST_SENDS as u64),
+            ("manifest.full_name", MANIFEST_FULL_NAME as u64),
+            ("manifest.app_name", MANIFEST_APP_NAME as u64),
+            ("manifest.app_url", MANIFEST_APP_URL as u64),
+            ("manifest.purpose", MANIFEST_PURPOSE as u64),
+            (
+                "manifest.purpose_translations",
+                MANIFEST_PURPOSE_TRANSLATIONS as u64,
+            ),
             ("manifest.language_tag", MANIFEST_LANGUAGE_TAG as u64),
+            ("transports.relay_url", TRANSPORTS_RELAY_URL as u64),
             ("protocol.error_field", PROTOCOL_ERROR_FIELD as u64),
             ("fields.depth", FIELDS_DEPTH as u64),
             ("fields.long_default", FIELDS_LONG_DEFAULT),

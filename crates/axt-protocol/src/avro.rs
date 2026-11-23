@@ -315,7 +315,7 @@ fn names_its_branch(union: &UnionSchema) -> bool {
 }
 
 /// The name of a branch: the full name of a named type, otherwise the type's name.
-fn branch_name(schema: &AvroSchema) -> String {
+pub(crate) fn branch_name(schema: &AvroSchema) -> String {
     match schema {
         AvroSchema::Record(r) => r.name.fullname(None),
         AvroSchema::Enum(e) => e.name.fullname(None),
