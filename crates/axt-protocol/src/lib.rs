@@ -18,6 +18,8 @@ pub mod schemas;
 mod time_values;
 pub mod type_description;
 pub mod value;
+#[cfg(feature = "conformance")]
+mod zone_rules;
 
 #[cfg(feature = "conformance")]
 #[doc(hidden)]

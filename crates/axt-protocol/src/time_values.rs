@@ -43,7 +43,7 @@ fn is_leap(year: i64) -> bool {
 }
 
 /// The days of `month` in `year`, or of a leap year when `year` is `None`.
-fn days_in_month(year: Option<i64>, month: i64) -> i64 {
+pub(crate) fn days_in_month(year: Option<i64>, month: i64) -> i64 {
     match month {
         2 if year.is_none_or(is_leap) => 29,
         2 => 28,
@@ -102,7 +102,7 @@ fn is_zone_name(zone: &str) -> bool {
 
 /// The days from 1970-01-01 to `year`-`month`-`day` of the proleptic Gregorian calendar,
 /// for a year from 1 to 9999.
-fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> Option<i64> {
     let y = if month <= 2 {
         year.checked_sub(1)?
     } else {
@@ -263,8 +263,46 @@ mod tests {
         ));
         assert!(!is_valid_time_value(
             "axt.DateTime",
+            &date_time(1, Some("Europe/Berlin"), Some(64_801), Some(instant))
+        ));
+        assert!(!is_valid_time_value(
+            "axt.DateTime",
             &date_time(32, None, None, None)
         ));
+    }
+
+    #[test]
+    fn a_date_keeps_the_leap_years_and_the_days_of_its_month() {
+        let valid = |y, m, d| is_valid_time_value("axt.Date", &date(y, m, d));
+        assert!(valid(Some(2026), Some(11), Some(24)));
+        assert!(valid(Some(2027), Some(3), None));
+        assert!(valid(Some(2019), None, None));
+        assert!(valid(None, Some(5), Some(3)));
+        assert!(!valid(Some(1900), Some(2), Some(29)));
+        assert!(valid(Some(2000), Some(2), Some(29)));
+        assert!(!valid(Some(0), Some(1), Some(1)));
+        assert!(!valid(Some(2026), Some(4), Some(31)));
+    }
+
+    #[test]
+    fn zone_names_keep_the_syntax_of_the_database() {
+        assert!(is_zone_name("America/Argentina/Buenos_Aires"));
+        assert!(is_zone_name("Etc/GMT+1"));
+        assert!(is_zone_name("UTC"));
+        assert!(!is_zone_name(""));
+        assert!(!is_zone_name("Europe//Berlin"));
+        assert!(!is_zone_name("."));
+        assert!(!is_zone_name("-x"));
+        assert!(!is_zone_name("Europe/Berlin "));
+        assert!(!is_zone_name(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn days_from_civil_counts_from_1970_01_01() {
+        assert_eq!(days_from_civil(1970, 1, 1), Some(0));
+        assert_eq!(days_from_civil(2000, 3, 1), Some(11017));
+        assert_eq!(days_from_civil(1, 1, 1), Some(-719_162));
+        assert_eq!(days_from_civil(1969, 12, 31), Some(-1));
     }
 
     #[test]
@@ -279,6 +317,16 @@ mod tests {
         };
         assert!(is_valid_time_value("axt.Time", &time(23)));
         assert!(!is_valid_time_value("axt.Time", &time(24)));
+        let mut late = time(0);
+        if let Value::Record(fields) = &mut late {
+            fields[2].1 = Value::Int(60);
+        }
+        assert!(!is_valid_time_value("axt.Time", &late));
+        let mut early = time(0);
+        if let Value::Record(fields) = &mut early {
+            fields[3].1 = Value::Int(-1);
+        }
+        assert!(!is_valid_time_value("axt.Time", &early));
         let duration = |m, d, ms| {
             record(&[
                 ("months", Value::Int(m)),
@@ -287,6 +335,8 @@ mod tests {
             ])
         };
         assert!(is_valid_time_value("axt.Duration", &duration(-1, 0, -5)));
+        assert!(is_valid_time_value("axt.Duration", &duration(1, 2, 3)));
+        assert!(is_valid_time_value("axt.Duration", &duration(0, 0, 0)));
         assert!(!is_valid_time_value("axt.Duration", &duration(1, -1, 0)));
         assert!(!is_valid_time_value("axt.Other", &duration(1, 1, 1)));
     }

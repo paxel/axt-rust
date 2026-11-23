@@ -13,10 +13,11 @@ use crate::record_decoder;
 use crate::schema::Schema;
 use crate::type_description::TypeDescription;
 use crate::value::Value;
+use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClock, Zoned};
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types", "time"];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -111,6 +112,8 @@ fn operation(op: &str) -> Option<Operation> {
         "derive" => derive,
         "describe" => describe,
         "check_record" => check_record,
+        "resolve_date_time" => resolve_date_time,
+        "add_duration" => add_duration,
         _ => return None,
     })
 }
@@ -262,6 +265,96 @@ fn check_record(input: &Map<String, Json>) -> Result<Json, Failure> {
     Ok(accept(json!({})))
 }
 
+/// `resolve_date_time` (section 5.12): a `DateTime` as a receiver with the zone rules of the
+/// vectors takes it for a field with an anchor.
+fn resolve_date_time(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let anchor = match input.get("anchor").and_then(Json::as_str) {
+        Some("local") => Anchor::Local,
+        Some("instant") => Anchor::Instant,
+        other => return Err(Failure::BadRequest(format!("no anchor {other:?}"))),
+    };
+    let resolved = zone_rules::resolve_date_time(&TzdbZoneRules, &date_time(input)?, anchor)
+        .ok_or_else(|| Failure::BadRequest("the reading is out of range".into()))?;
+    Ok(accept(json!({"date_time": date_time_json(&resolved)})))
+}
+
+/// `add_duration` (section 5.12): a `DateTime` plus a `Duration`.
+fn add_duration(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let duration = object(input, "duration")?;
+    let duration = Duration {
+        months: integer(duration, "months")?,
+        days: integer(duration, "days")?,
+        millis: integer(duration, "millis")?,
+    };
+    let sum = zone_rules::add_duration(&TzdbZoneRules, &date_time(input)?, duration)
+        .ok_or_else(|| Failure::BadRequest("the sum is out of range".into()))?;
+    Ok(accept(json!({"date_time": date_time_json(&sum)})))
+}
+
+/// The member `date_time` of the input: a `DateTime` with either all of `zone`,
+/// `offset_seconds` and `instant_ms` or none of them.
+fn date_time(input: &Map<String, Json>) -> Result<DateTime, Failure> {
+    let v = object(input, "date_time")?;
+    let wall = WallClock {
+        year: integer(v, "year")?,
+        month: integer(v, "month")?,
+        day: integer(v, "day")?,
+        hour: integer(v, "hour")?,
+        minute: integer(v, "minute")?,
+        second: integer(v, "second")?,
+        millisecond: integer(v, "millisecond")?,
+    };
+    let parts = (v.get("zone"), v.get("offset_seconds"), v.get("instant_ms"));
+    let zoned = match parts {
+        (Some(Json::Null), Some(Json::Null), Some(Json::Null)) => None,
+        (Some(Json::String(zone)), Some(_), Some(_)) => Some(Zoned {
+            zone: zone.clone(),
+            offset_seconds: integer(v, "offset_seconds")?,
+            instant_ms: integer(v, "instant_ms")?,
+        }),
+        _ => {
+            return Err(Failure::BadRequest(
+                "date_time has neither all nor none of zone, offset_seconds and instant_ms".into(),
+            ));
+        }
+    };
+    Ok(DateTime { wall, zoned })
+}
+
+/// A `DateTime` in the JSON form of the vectors.
+fn date_time_json(date_time: &DateTime) -> Json {
+    let w = &date_time.wall;
+    let z = date_time.zoned.as_ref();
+    json!({
+        "year": w.year,
+        "month": w.month,
+        "day": w.day,
+        "hour": w.hour,
+        "minute": w.minute,
+        "second": w.second,
+        "millisecond": w.millisecond,
+        "zone": z.map(|z| z.zone.clone()),
+        "offset_seconds": z.map(|z| z.offset_seconds),
+        "instant_ms": z.map(|z| z.instant_ms),
+    })
+}
+
+/// The member `name` of the input as an object.
+fn object<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a Map<String, Json>, Failure> {
+    input
+        .get(name)
+        .and_then(Json::as_object)
+        .ok_or_else(|| Failure::BadRequest(format!("{name} is not an object")))
+}
+
+/// The member `name` of the input as an integer.
+fn integer(input: &Map<String, Json>, name: &str) -> Result<i64, Failure> {
+    input
+        .get(name)
+        .and_then(Json::as_i64)
+        .ok_or_else(|| Failure::BadRequest(format!("{name} is not an integer")))
+}
+
 /// The member `name` of the input as a string.
 fn string<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a str, Failure> {
     input
@@ -354,7 +447,7 @@ mod tests {
         let answer = ask("hello", json!({"format": 1}));
         assert_eq!(
             answer["output"]["categories"],
-            json!(["encoding", "bricks", "types"])
+            json!(["encoding", "bricks", "types", "time"])
         );
     }
 
@@ -380,6 +473,52 @@ mod tests {
             json!({"reject": {"error": "INVALID_MESSAGE"}})
         );
         let answer = ask("decode_body", json!({"kind": "DATA", "body": ""}));
+        assert!(answer.get("failure").is_some());
+    }
+
+    #[test]
+    fn a_date_time_is_resolved_and_added_to_with_every_field() {
+        let floating = json!({
+            "year": 9999, "month": 12, "day": 31, "hour": 23, "minute": 0, "second": 0,
+            "millisecond": 0, "zone": null, "offset_seconds": null, "instant_ms": null,
+        });
+        let answer = ask(
+            "resolve_date_time",
+            json!({"date_time": floating, "anchor": "instant"}),
+        );
+        assert_eq!(answer["output"], json!({"accept": {"date_time": floating}}));
+        let earlier = json!({"months": 0, "days": 0, "millis": -3_600_000});
+        let answer = ask(
+            "add_duration",
+            json!({"date_time": floating, "duration": earlier}),
+        );
+        assert_eq!(answer["output"]["accept"]["date_time"]["hour"], 22);
+        assert!(answer["output"]["accept"]["date_time"]["zone"].is_null());
+    }
+
+    #[test]
+    fn a_request_the_time_operations_cannot_read_is_a_failure() {
+        let floating = json!({
+            "year": 9999, "month": 12, "day": 31, "hour": 23, "minute": 0, "second": 0,
+            "millisecond": 0, "zone": null, "offset_seconds": null, "instant_ms": null,
+        });
+        let answer = ask(
+            "resolve_date_time",
+            json!({"date_time": floating, "anchor": "nope"}),
+        );
+        assert!(answer.get("failure").is_some());
+        let mut partial = floating.clone();
+        partial["zone"] = json!("Europe/Berlin");
+        let answer = ask(
+            "resolve_date_time",
+            json!({"date_time": partial, "anchor": "local"}),
+        );
+        assert!(answer.get("failure").is_some());
+        let hour = json!({"months": 0, "days": 0, "millis": 3_600_000});
+        let answer = ask(
+            "add_duration",
+            json!({"date_time": floating, "duration": hour}),
+        );
         assert!(answer.get("failure").is_some());
     }
 
