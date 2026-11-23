@@ -3,9 +3,23 @@
 //! AXT is the open standard of <https://github.com/paxel/axt> for small apps to
 //! exchange typed records.
 
+mod avro;
+pub mod envelope;
+pub mod error;
+pub mod schema;
+pub mod schemas;
+pub mod value;
+
 #[cfg(feature = "conformance")]
 #[doc(hidden)]
 pub mod conformance;
+
+pub use envelope::{
+    Envelope, Kind, MAX_MESSAGE_BYTES, RecordRef, decode_body, decode_message, encode_message,
+};
+pub use error::{Error, ErrorCode};
+pub use schema::{Fingerprint, Schema};
+pub use value::Value;
 
 /// The version of the AXT specification this library conforms to.
 pub const AXT_VERSION: &str = "0.2.0";

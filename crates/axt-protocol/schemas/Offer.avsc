@@ -1,0 +1,1331 @@
+{
+  "type": "record",
+  "name": "Offer",
+  "namespace": "axt",
+  "doc": "The body of an OFFER message: the types, each with its description, whose records the sender wants to send to one receiver. Defined in spec/protocol.md. Its schema changes only with a new envelope format or a new schema of axt.Field (spec/fields.md).",
+  "fields": [
+    {
+      "name": "to",
+      "type": {
+        "type": "fixed",
+        "name": "OfferTo",
+        "size": 32,
+        "doc": "An Ed25519 public key in the encoding of RFC 8032. Defined in spec/keys.md."
+      },
+      "doc": "The Ed25519 public key of the device the offer is made to, a current key of the receiver. A device ignores an offer that names another key."
+    },
+    {
+      "name": "offer_id",
+      "type": {
+        "type": "string",
+        "logicalType": "uuid"
+      },
+      "doc": "The id of the offer, a version 4 or 7 UUID in its 36-character lower-case text form, which the sender never uses for another offer. The answers to the offer name it."
+    },
+    {
+      "name": "types",
+      "type": {
+        "type": "array",
+        "items": {
+          "type": "record",
+          "name": "OfferType",
+          "doc": "One type the sender offers, with the description from which the writer schema of its records is derived.",
+          "fields": [
+            {
+              "name": "description",
+              "type": {
+                "type": "record",
+                "name": "Field",
+                "namespace": "axt",
+                "doc": "A typed field: a brick that describes one field of a type, its name, texts and checks, at the level of the schema. A type is described by an object field at its root, from which its Avro schema is derived. Defined in spec/fields.md.",
+                "fields": [
+                  {
+                    "name": "name",
+                    "type": "string",
+                    "doc": "The name of the field, in snake_case, such as postal_code (spec/fields.md, section 3.1)."
+                  },
+                  {
+                    "name": "doc",
+                    "type": "string",
+                    "doc": "What the value is, in English, for the developer; not empty. It says what an empty or absent value means (spec/fields.md, section 3.1)."
+                  },
+                  {
+                    "name": "texts",
+                    "type": {
+                      "type": "record",
+                      "name": "FieldTexts",
+                      "doc": "The texts a receiver shows for a field, an enum symbol or a group, in English and in other languages (spec/fields.md, section 3.2).",
+                      "fields": [
+                        {
+                          "name": "label",
+                          "type": "string",
+                          "default": "",
+                          "doc": "The name shown for it, in English, one line of at most 256 bytes; the empty string for none, when its name is shown (spec/fields.md, section 3.2)."
+                        },
+                        {
+                          "name": "label_translations",
+                          "type": {
+                            "type": "map",
+                            "values": "string"
+                          },
+                          "default": {},
+                          "doc": "The label in other languages, by language tag; empty when it is not translated (spec/fields.md, section 3.2)."
+                        },
+                        {
+                          "name": "help",
+                          "type": "string",
+                          "default": "",
+                          "doc": "One or two sentences in English that say what the value is or how to enter it, one line of at most 1,024 bytes; the empty string for none (spec/fields.md, section 3.2)."
+                        },
+                        {
+                          "name": "help_translations",
+                          "type": {
+                            "type": "map",
+                            "values": "string"
+                          },
+                          "default": {},
+                          "doc": "The help in other languages, by language tag; empty when it is not translated (spec/fields.md, section 3.2)."
+                        },
+                        {
+                          "name": "emoji",
+                          "type": "string",
+                          "default": "",
+                          "doc": "An emoji shown next to the label, 1 to 10 code points; the empty string for none (spec/fields.md, section 3.2)."
+                        }
+                      ]
+                    },
+                    "doc": "The texts a receiver shows for the field (spec/fields.md, section 3.2)."
+                  },
+                  {
+                    "name": "required",
+                    "type": "boolean",
+                    "default": false,
+                    "doc": "True when the field needs a value: not null, and not an empty string, bytes, list or map (spec/fields.md, section 3.3)."
+                  },
+                  {
+                    "name": "order",
+                    "type": [
+                      "null",
+                      "int"
+                    ],
+                    "default": null,
+                    "doc": "Where the field is shown among the fields of its object, the lowest first; null to keep the order of the fields (spec/fields.md, section 3.4)."
+                  },
+                  {
+                    "name": "group",
+                    "type": "string",
+                    "default": "",
+                    "doc": "The key of the group of its object that the field is shown in; the empty string for none (spec/fields.md, section 3.4)."
+                  },
+                  {
+                    "name": "sensitive",
+                    "type": "boolean",
+                    "default": false,
+                    "doc": "True when the value is a secret or personal data that others near the screen should not see (spec/fields.md, section 3.4)."
+                  },
+                  {
+                    "name": "advanced",
+                    "type": "boolean",
+                    "default": false,
+                    "doc": "True when most users need not see or fill in the field (spec/fields.md, section 3.4)."
+                  },
+                  {
+                    "name": "kind",
+                    "type": [
+                      {
+                        "type": "record",
+                        "name": "StringField",
+                        "doc": "A field of plain text (spec/fields.md, section 4.1).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "pattern",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "An I-Regexp of RFC 9485 that a non-empty value matches as a whole, at most 1,024 bytes; null for none (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "multiline",
+                            "type": "boolean",
+                            "default": false,
+                            "doc": "True when a value may hold several lines, separated by LF, so that an input of several lines is offered (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "IntField",
+                        "doc": "A field of 32-bit integers (spec/fields.md, section 4.2).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a int, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The smallest value the field holds; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "max",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The largest value the field holds, at least min; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "unit",
+                            "type": "string",
+                            "default": "",
+                            "doc": "The unit of the value, a case-sensitive code of UCUM such as min for minutes; the empty string when the field has no fixed unit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "LongField",
+                        "doc": "A field of 64-bit integers (spec/fields.md, section 4.2).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "long"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a long, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min",
+                            "type": [
+                              "null",
+                              "long"
+                            ],
+                            "default": null,
+                            "doc": "The smallest value the field holds; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "max",
+                            "type": [
+                              "null",
+                              "long"
+                            ],
+                            "default": null,
+                            "doc": "The largest value the field holds, at least min; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "unit",
+                            "type": "string",
+                            "default": "",
+                            "doc": "The unit of the value, a case-sensitive code of UCUM such as min for minutes; the empty string when the field has no fixed unit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "DoubleField",
+                        "doc": "A field of numbers of double precision (spec/fields.md, section 4.2).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "double"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a double, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min",
+                            "type": [
+                              "null",
+                              "double"
+                            ],
+                            "default": null,
+                            "doc": "The smallest value the field holds; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "max",
+                            "type": [
+                              "null",
+                              "double"
+                            ],
+                            "default": null,
+                            "doc": "The largest value the field holds, at least min; null for no limit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "unit",
+                            "type": "string",
+                            "default": "",
+                            "doc": "The unit of the value, a case-sensitive code of UCUM such as min for minutes; the empty string when the field has no fixed unit (spec/fields.md, section 4.2)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "BooleanField",
+                        "doc": "A field of true or false (spec/fields.md, section 4.3).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "boolean"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, true or false, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "BytesField",
+                        "doc": "A field of bytes (spec/fields.md, section 4.3).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "bytes"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, bytes, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest bytes a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most bytes a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "EnumField",
+                        "doc": "A field whose value is one of a list of symbols (spec/fields.md, section 4.4).",
+                        "fields": [
+                          {
+                            "name": "name",
+                            "type": "string",
+                            "doc": "The name of the enum, an Avro name in UpperCamelCase, such as VetKind; the enum of the derived schema has it (spec/fields.md, section 4.4)."
+                          },
+                          {
+                            "name": "symbols",
+                            "type": {
+                              "type": "array",
+                              "items": {
+                                "type": "record",
+                                "name": "EnumSymbol",
+                                "doc": "One symbol of an enum field, with its texts (spec/fields.md, section 4.4).",
+                                "fields": [
+                                  {
+                                    "name": "symbol",
+                                    "type": "string",
+                                    "doc": "The symbol, an Avro name in UPPER_SNAKE_CASE such as EMERGENCY (spec/fields.md, section 4.4)."
+                                  },
+                                  {
+                                    "name": "texts",
+                                    "type": "axt.FieldTexts",
+                                    "doc": "The texts shown for the symbol; without a label the symbol is shown (spec/fields.md, section 4.4)."
+                                  }
+                                ]
+                              }
+                            },
+                            "doc": "The symbols, at least one, in their order (spec/fields.md, section 4.4)."
+                          },
+                          {
+                            "name": "fallback",
+                            "type": "string",
+                            "doc": "The symbol, one of symbols, that a receiver reads a symbol it does not know as (spec/fields.md, section 4.4)."
+                          },
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, one of symbols, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "ListField",
+                        "doc": "A field whose value is a list of items of one typed field (spec/fields.md, section 4.5).",
+                        "fields": [
+                          {
+                            "name": "items",
+                            "type": "axt.Field",
+                            "doc": "The typed field of each item: its kind and checks apply to each item, and its texts name one item. Its name is that of the list (spec/fields.md, section 4.5)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "MapField",
+                        "doc": "A field whose value maps strings to values of one typed field (spec/fields.md, section 4.5).",
+                        "fields": [
+                          {
+                            "name": "values",
+                            "type": "axt.Field",
+                            "doc": "The typed field of each value: its kind and checks apply to each value, and its texts name one value. Its name is that of the map (spec/fields.md, section 4.5)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "ObjectField",
+                        "doc": "A composite field: a value made of typed fields, such as an address of a street, a postal code and a country (spec/fields.md, section 4.6).",
+                        "fields": [
+                          {
+                            "name": "name",
+                            "type": "string",
+                            "doc": "The name of the object, an Avro name in UpperCamelCase such as VetAddress, or at the root of a type a full name such as com.example.Vet; the record of the derived schema has it (spec/fields.md, section 4.6)."
+                          },
+                          {
+                            "name": "fields",
+                            "type": {
+                              "type": "array",
+                              "items": "axt.Field"
+                            },
+                            "doc": "The typed fields of the object, at least one, in the order of their encoding (spec/fields.md, section 4.6)."
+                          },
+                          {
+                            "name": "groups",
+                            "type": {
+                              "type": "array",
+                              "items": {
+                                "type": "record",
+                                "name": "FieldGroup",
+                                "doc": "A group of fields of an object, shown together under its texts (spec/fields.md, section 4.6).",
+                                "fields": [
+                                  {
+                                    "name": "key",
+                                    "type": "string",
+                                    "doc": "The group key that the fields of the group name in their group, at most 64 bytes (spec/fields.md, section 3.4)."
+                                  },
+                                  {
+                                    "name": "texts",
+                                    "type": "axt.FieldTexts",
+                                    "doc": "The texts shown for the group; without a label the key is shown (spec/fields.md, section 4.6)."
+                                  }
+                                ]
+                              }
+                            },
+                            "default": [],
+                            "doc": "The groups that fields of the object name; empty when it has none (spec/fields.md, section 4.6)."
+                          },
+                          {
+                            "name": "version",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "At the root of a description, the version of the type within its major version, from 1 (spec/types.md, section 3.2); null in a nested object (spec/fields.md, section 9.1)."
+                          },
+                          {
+                            "name": "title",
+                            "type": "string",
+                            "default": "",
+                            "doc": "The name of a field of the object whose value is the title of a value, such as display_name; the empty string for none (spec/fields.md, section 9.1)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "DateField",
+                        "doc": "A field of axt.Date values (spec/time.md; spec/fields.md, section 4.7).",
+                        "fields": []
+                      },
+                      {
+                        "type": "record",
+                        "name": "TimeField",
+                        "doc": "A field of axt.Time values (spec/time.md; spec/fields.md, section 4.7).",
+                        "fields": []
+                      },
+                      {
+                        "type": "record",
+                        "name": "DateTimeField",
+                        "doc": "A field of axt.DateTime values (spec/time.md; spec/fields.md, section 4.7).",
+                        "fields": [
+                          {
+                            "name": "anchor",
+                            "type": {
+                              "type": "enum",
+                              "name": "DateTimeAnchor",
+                              "doc": "What a receiver keeps of a date and time when its zone rules differ from the writer's: LOCAL, the wall clock, or INSTANT, the instant (spec/time.md, section 6.4; spec/fields.md, section 4.7).",
+                              "symbols": [
+                                "LOCAL",
+                                "INSTANT"
+                              ],
+                              "default": "LOCAL"
+                            },
+                            "default": "LOCAL",
+                            "doc": "The anchor of the field's values (spec/fields.md, section 4.7)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "DurationField",
+                        "doc": "A field of axt.Duration values (spec/time.md; spec/fields.md, section 4.7).",
+                        "fields": []
+                      },
+                      {
+                        "type": "record",
+                        "name": "MarkdownField",
+                        "doc": "A field of text read as CommonMark: the format markdown of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "EmailField",
+                        "doc": "A field of strings that each hold an email address: the format email of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format email, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "PhoneField",
+                        "doc": "A field of strings that each hold a phone number in E.164 form: the format phone of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format phone, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "UrlField",
+                        "doc": "A field of strings that each hold a web address of the scheme http or https: the format url of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format url, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "UriField",
+                        "doc": "A field of strings that each hold a URI of any scheme: the format uri of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format uri, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "ColourField",
+                        "doc": "A field of strings that each hold a colour of sRGB: the format colour of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format colour, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "IbanField",
+                        "doc": "A field of strings that each hold an IBAN: the format iban of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format iban, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "BicField",
+                        "doc": "A field of strings that each hold a BIC: the format bic of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format bic, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "CountryField",
+                        "doc": "A field of strings that each hold a country code of ISO 3166-1 alpha-2: the format country of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format country, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "LanguageField",
+                        "doc": "A field of strings that each hold a language tag: the format language of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format language, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "CurrencyField",
+                        "doc": "A field of strings that each hold a currency code of ISO 4217: the format currency of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format currency, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "MediaTypeField",
+                        "doc": "A field of strings that each hold a media type: the format media-type of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format media-type, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "UcumField",
+                        "doc": "A field of strings that each hold a unit code of UCUM: the format ucum of spec/metadata.md, section 6.3, built in (spec/fields.md, section 5).",
+                        "fields": [
+                          {
+                            "name": "default",
+                            "type": [
+                              "null",
+                              "string"
+                            ],
+                            "default": null,
+                            "doc": "The value the field starts with when its user gives none, a string of the format ucum, which meets the field's checks; null for none (spec/fields.md, section 3.3)."
+                          },
+                          {
+                            "name": "min_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The fewest code points a value has, at least 0; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "max_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The most code points a value has, at least 0 and at least min_length; null for no limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "preferred_length",
+                            "type": [
+                              "null",
+                              "int"
+                            ],
+                            "default": null,
+                            "doc": "The number of code points an input for the field has room for, at least 1 and at most max_length; null for none. Not a limit (spec/fields.md, section 4.1)."
+                          },
+                          {
+                            "name": "placeholder",
+                            "type": "string",
+                            "default": "",
+                            "doc": "A text that an empty input for the field shows, such as +49301234567; the empty string for none (spec/fields.md, section 3.4)."
+                          },
+                          {
+                            "name": "example",
+                            "type": "string",
+                            "default": "",
+                            "doc": "An example value as text, which meets the field's checks; the empty string for none (spec/fields.md, section 3.4)."
+                          }
+                        ]
+                      },
+                      {
+                        "type": "record",
+                        "name": "RelationField",
+                        "doc": "A field whose value is a list of relations, each an axt.Relation that links the record to another record or to a thing outside AXT (spec/fields.md, section 11).",
+                        "fields": []
+                      },
+                      {
+                        "type": "record",
+                        "name": "ExtensionField",
+                        "doc": "A field whose value is a list of extensions, each an axt.Extension that holds a record of an app's own type (spec/fields.md, section 12).",
+                        "fields": []
+                      }
+                    ],
+                    "doc": "The brick of the field's value: its kind and its checks (spec/fields.md, sections 4 and 5)."
+                  }
+                ]
+              },
+              "doc": "The description of the type, a typed field whose brick is an object, with which the sender writes the records it sends under this offer: their writer schema is derived from it (spec/fields.md, section 9). The type's full name and version are those of the description."
+            },
+            {
+              "name": "count",
+              "type": "long",
+              "default": 0,
+              "doc": "The number of record messages of the type, DATA and DELETE together, that the sender is about to send under this offer; for display only. 0 when the sender does not say."
+            }
+          ]
+        }
+      },
+      "doc": "The types offered, 1 to 256, each full name and each fingerprint of a derived schema at most once."
+    }
+  ]
+}
