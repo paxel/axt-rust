@@ -1,0 +1,22 @@
+name: CodeQL
+
+# CodeQL on every push, pull request and weekly, from paxel/gates; the workflows are always
+# analysed.
+on:
+  push:
+    branches: [summer]
+  pull_request:
+  schedule:
+    - cron: "47 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    uses: paxel/gates/.github/workflows/codeql.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
+    permissions:
+      contents: read
+      security-events: write
+    with:
+      languages: '["rust"]'

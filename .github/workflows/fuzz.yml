@@ -1,0 +1,18 @@
+name: Fuzz
+
+# The repository's fuzz targets, weekly and by hand, from paxel/gates.
+on:
+  schedule:
+    - cron: "29 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    uses: paxel/gates/.github/workflows/fuzz.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
+    with:
+      stack: rust
+      targets: |
+        adapter_answer

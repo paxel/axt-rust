@@ -1,5 +1,17 @@
 # axt-protocol
 
+[![CI](https://github.com/paxel/axt-rust/actions/workflows/ci.yml/badge.svg?branch=summer)](https://github.com/paxel/axt-rust/actions/workflows/ci.yml)
+[![Security](https://github.com/paxel/axt-rust/actions/workflows/security.yml/badge.svg?branch=summer)](https://github.com/paxel/axt-rust/actions/workflows/security.yml)
+[![CodeQL](https://github.com/paxel/axt-rust/actions/workflows/codeql.yml/badge.svg?branch=summer)](https://github.com/paxel/axt-rust/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/paxel/axt-rust/badge)](https://scorecard.dev/viewer/?uri=github.com/paxel/axt-rust)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=paxel_axt-rust&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=paxel_axt-rust)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fpaxel%2Faxt-rust%2Fsummer%2F.github%2Fbadges%2Fcoverage-rust.json)](coverage-floors.toml)
+[![Fuzz](https://github.com/paxel/axt-rust/actions/workflows/fuzz.yml/badge.svg?branch=summer)](https://github.com/paxel/axt-rust/actions/workflows/fuzz.yml)
+[![Release](https://img.shields.io/github/v/release/paxel/axt-rust)](https://github.com/paxel/axt-rust/releases)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue)](README.md#licence)
+[![panic-free](https://img.shields.io/badge/panic--free-linted-success)](Cargo.toml)
+[![unsafe](https://img.shields.io/badge/unsafe-forbidden-success)](Cargo.toml)
+
 The Rust library of [AXT](https://github.com/paxel/axt) (Avro eXchange Transfer), the open
 standard that lets small, independent apps exchange typed records with each other.
 

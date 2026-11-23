@@ -1,0 +1,34 @@
+name: CI
+
+# The gates every pull request and every push to summer runs, from paxel/gates (the standard:
+# its standard.toml). Sonar waits for the Rust job because it reads the coverage it measured.
+# A branch gets its run through its pull request; a run per push as well would be the same
+# jobs twice, and SonarQube Cloud analyses only the default branch and pull requests.
+on:
+  push:
+    branches: [summer]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  vulns:
+    uses: paxel/gates/.github/workflows/vulns.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
+
+  rust:
+    uses: paxel/gates/.github/workflows/rust.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
+    with:
+      also-on: '["windows-latest","macos-latest"]'
+      # The library only: the generator's and the adapter's mains are no library code.
+      coverage: rust -p axt-protocol
+
+  sonar:
+    needs: [rust]
+    uses: paxel/gates/.github/workflows/sonar.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
+    secrets:
+      sonar-token: ${{ secrets.SQ_TOKEN }}
