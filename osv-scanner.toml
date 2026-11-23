@@ -15,10 +15,3 @@
 # license.ignore = true
 # effectiveUntil = 2027-05-14
 # reason = "..."
-
-[[PackageOverrides]]
-name = "libfuzzer-sys"
-ecosystem = "crates.io"
-license.ignore = true
-effectiveUntil = 2027-05-23
-reason = "Only the fuzz crate (fuzz/) uses it, which is never published or shipped; its licence NCSA AND (Apache-2.0 OR MIT) adds NCSA, LLVM's permissive OSI-approved licence, which the allowlist lacks."
