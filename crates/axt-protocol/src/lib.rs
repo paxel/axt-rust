@@ -15,6 +15,8 @@ mod iregexp;
 pub mod keys;
 mod limits;
 mod links;
+#[cfg(feature = "conformance")]
+mod live_session;
 mod manifest;
 mod node;
 mod record_decoder;

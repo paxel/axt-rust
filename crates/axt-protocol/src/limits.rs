@@ -55,6 +55,17 @@ pub(crate) const MANIFEST_LANGUAGE_TAG: usize = 35;
 pub(crate) const TRANSPORTS_RELAY_URL: usize = 256;
 /// `protocol.error_field`: the most bytes of the field path of an error.
 pub(crate) const PROTOCOL_ERROR_FIELD: usize = 1024;
+/// `protocol.offer_types`: the most entries of `types` in one `OFFER`, `ACCEPT` or
+/// `DECLINE`.
+#[cfg(feature = "conformance")]
+pub(crate) const PROTOCOL_OFFER_TYPES: usize = 256;
+/// `protocol.ack_records`: the most entries of `records` in one `ACK`.
+#[cfg(feature = "conformance")]
+pub(crate) const PROTOCOL_ACK_RECORDS: usize = 4096;
+/// `protocol.error_record_id`: the most bytes of the id of the reported message's record
+/// up to which an `ERROR` carries `record`.
+#[cfg(feature = "conformance")]
+pub(crate) const PROTOCOL_ERROR_RECORD_ID: usize = 64;
 /// `fields.depth`: the deepest typed fields nest.
 pub(crate) const FIELDS_DEPTH: usize = 64;
 /// `fields.long_default`: the largest magnitude of a default of an `axt.LongField`.
@@ -148,5 +159,19 @@ mod tests {
         ] {
             assert_eq!(limit(name), value, "{name}");
         }
+    }
+
+    #[cfg(feature = "conformance")]
+    #[test]
+    fn the_limits_of_the_live_session_are_those_published() {
+        let json: serde_json::Value =
+            serde_json::from_str(include_str!("../schemas/limits.json")).unwrap();
+        let limit = |name: &str| json["limits"][name]["value"].as_u64().unwrap();
+        assert_eq!(limit("protocol.offer_types"), PROTOCOL_OFFER_TYPES as u64);
+        assert_eq!(limit("protocol.ack_records"), PROTOCOL_ACK_RECORDS as u64);
+        assert_eq!(
+            limit("protocol.error_record_id"),
+            PROTOCOL_ERROR_RECORD_ID as u64
+        );
     }
 }

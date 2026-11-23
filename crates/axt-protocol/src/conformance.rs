@@ -18,6 +18,7 @@ use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
 use crate::file_reader;
 use crate::keys::{EncryptionSeed, SigningSeed};
+use crate::live_session::LiveApp;
 use crate::manifest;
 use crate::record_decoder;
 use crate::records::{
@@ -35,7 +36,7 @@ use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClo
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
 pub const IMPLEMENTED_CATEGORIES: &[&str] = &[
-    "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file",
+    "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file", "protocol",
 ];
 
 /// The version of the vector file format the adapter reads.
@@ -155,6 +156,7 @@ fn operation(op: &str) -> Option<Operation> {
         "choose_format" => choose_format,
         "contact_key" => contact_key,
         "resend_after_removal" => resend_after_removal,
+        "session" => session,
         _ => return None,
     })
 }
@@ -1003,18 +1005,7 @@ fn fit(input: &Map<String, Json>) -> Result<Json, Failure> {
 fn read_file(input: &Map<String, Json>) -> Result<Json, Failure> {
     let reader = object(input, "reader")?;
     let manifest = envelope::decode_body(Kind::Manifest, &bytes(reader.get("manifest"))?)?;
-    let mut readers = BTreeMap::new();
-    if let Some(given) = reader.get("readers") {
-        let given = given
-            .as_object()
-            .ok_or_else(|| Failure::BadRequest("readers is not an object".into()))?;
-        for (name, text) in given {
-            let text = text.as_str().ok_or_else(|| {
-                Failure::BadRequest("readers is not an object of schema texts".into())
-            })?;
-            readers.insert(name.clone(), text.to_owned());
-        }
-    }
+    let readers = schema_texts(reader.get("readers"))?;
     let (current, removed) = match reader.get("keys").and_then(Json::as_object) {
         Some(own) => (keys(own.get("current"))?, keys(own.get("removed"))?),
         None => (BTreeSet::new(), BTreeSet::new()),
@@ -1086,6 +1077,23 @@ fn read_file(input: &Map<String, Json>) -> Result<Json, Failure> {
         "manifest": manifest_state,
         "records": records,
     })))
+}
+
+/// Reader schemas by full name, as schema texts; none when absent.
+fn schema_texts(value: Option<&Json>) -> Result<BTreeMap<String, String>, Failure> {
+    let mut readers = BTreeMap::new();
+    if let Some(given) = value {
+        let given = given
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("readers is not an object".into()))?;
+        for (name, text) in given {
+            let text = text.as_str().ok_or_else(|| {
+                Failure::BadRequest("readers is not an object of schema texts".into())
+            })?;
+            readers.insert(name.clone(), text.to_owned());
+        }
+    }
+    Ok(readers)
 }
 
 /// A list of integers.
@@ -1170,6 +1178,94 @@ fn resend_after_removal(input: &Map<String, Json>) -> Result<Json, Failure> {
         }
     }
     Ok(accept(json!({"ids": ids})))
+}
+
+/// `session` (section 5.6): one app in one live connection with another app whose key
+/// its user has accepted (protocol.md, sections 3 to 9 and 14).
+fn session(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let app_input = object(input, "app")?;
+    let user_takes = app_input
+        .get("user_takes")
+        .and_then(Json::as_array)
+        .and_then(|takes| {
+            takes
+                .iter()
+                .map(|t| t.as_str().map(str::to_owned))
+                .collect::<Option<BTreeSet<_>>>()
+        })
+        .ok_or_else(|| Failure::BadRequest("user_takes is not a list of strings".into()))?;
+    // The app reads envelope format 1 alone; the formats are read but change nothing.
+    integers(app_input.get("formats"), "formats")?;
+    let mut app = LiveApp::open(
+        SigningSeed::new(sized(app_input, "seed")?),
+        &bytes(app_input.get("manifest"))?,
+        schema_texts(app_input.get("readers"))?,
+        user_takes,
+        sized(app_input, "peer")?,
+    )?;
+    let steps = input
+        .get("steps")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("steps is no list".into()))?;
+    let mut answers = Vec::new();
+    for step in steps {
+        let step = step
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("a step is no object".into()))?;
+        let replies =
+            |replies: &[Vec<u8>]| -> Vec<String> { replies.iter().map(|r| hex(r)).collect() };
+        answers.push(if let Some(message) = step.get("receive") {
+            let received = app.receive(&bytes(Some(message))?)?;
+            json!({
+                "outcome": received.outcome.map(|o| o.as_str()),
+                "close": received.close,
+                "replies": replies(&received.replies),
+            })
+        } else if step.contains_key("flush_acks") {
+            let (_, sent) = app.flush_acks()?;
+            json!({"replies": replies(&sent)})
+        } else if step.contains_key("offer") {
+            let offer = object(step, "offer")?;
+            let types = offer
+                .get("types")
+                .and_then(Json::as_array)
+                .ok_or_else(|| Failure::BadRequest("types is no list".into()))?
+                .iter()
+                .map(|t| {
+                    let t = t
+                        .as_object()
+                        .ok_or_else(|| Failure::BadRequest("a type is no object".into()))?;
+                    let description =
+                        bricks::description_from_json(t.get("description").unwrap_or(&Json::Null))?;
+                    Ok((description, integer(t, "count")?))
+                })
+                .collect::<Result<Vec<_>, Failure>>()?;
+            let message = app.offer(string(offer, "offer_id")?, &types)?;
+            json!({"message": hex(&message)})
+        } else if step.contains_key("close") {
+            app.close_connection();
+            json!({})
+        } else if step.contains_key("query") {
+            let query = object(step, "query")?;
+            if query.contains_key("accepted") {
+                json!({"accepted": app.accepted(string(query, "accepted")?)})
+            } else if query.contains_key("outcome") {
+                let of = object(query, "outcome")?;
+                let outcome = app.outcome_of(string(of, "id")?, integer(of, "version")?);
+                json!({"outcome": outcome.map(|o| o.as_str())})
+            } else if query.contains_key("record") {
+                let held = app.record(string(query, "record")?);
+                json!({
+                    "record": held.map(|h| json!({"version": h.version, "state": h.state.code()})),
+                })
+            } else {
+                json!({"errors": app.errors()})
+            }
+        } else {
+            return Err(Failure::BadRequest("a step of no known form".into()));
+        });
+    }
+    Ok(json!({"steps": answers}))
 }
 
 /// The member `name` of the input as an object.
@@ -1281,7 +1377,8 @@ mod tests {
         assert_eq!(
             answer["output"]["categories"],
             json!([
-                "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file"
+                "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file",
+                "protocol"
             ])
         );
     }
@@ -1711,5 +1808,87 @@ mod tests {
         );
         assert_eq!(answer["output"]["accept"]["ids"], json!(["x", "z"]));
         assert!(ask("contact_key", json!({"current": [], "manifests": []}))["failure"].is_string());
+    }
+
+    #[test]
+    fn a_session_answers_each_step() {
+        let seed = "11".repeat(32);
+        let peer = hex(&ed25519::public_key_of(&SigningSeed::new([0x22; 32])));
+        let manifest = envelope::encode_message(&Envelope {
+            kind: Kind::Manifest,
+            sender: [0; 32],
+            record: None,
+            body: Vec::new(),
+            signature: [0; 64],
+        })
+        .unwrap();
+        let own_manifest = crate::schemas::axt_schema("axt.Manifest")
+            .unwrap()
+            .encode_single_object(
+                &crate::schemas::axt_schema("axt.Manifest")
+                    .unwrap()
+                    .datum_of_json(&json!({
+                        "revision": 1, "app_name": "app", "app_url": null, "formats": [1],
+                        "takes": [], "any_type": null, "sends": null,
+                        "encryption_key": null, "relay": null,
+                    }))
+                    .unwrap(),
+            )
+            .unwrap();
+        let description = json!({
+            "name": "root", "doc": "A type.", "texts": {},
+            "kind": {"axt.ObjectField": {"name": "org.example.Memo", "fields": []}},
+        });
+        let app = json!({
+            "seed": seed,
+            "manifest": hex(&own_manifest),
+            "formats": [1],
+            "readers": {},
+            "user_takes": [],
+            "peer": peer,
+        });
+        let answer = ask(
+            "session",
+            json!({
+                "app": app,
+                "steps": [
+                    {"receive": hex(&manifest)},
+                    {"offer": {"offer_id": "6f1c2b9e-3d4a-4e5f-8a7b-1c2d3e4f5a6b",
+                               "types": [{"description": description, "count": 2}]}},
+                    {"flush_acks": true},
+                    {"close": true},
+                    {"query": {"accepted": "org.example.Memo"}},
+                    {"query": {"outcome": {"id": "x", "version": 1}}},
+                    {"query": {"record": "x"}},
+                    {"query": {"errors": true}},
+                ],
+            }),
+        );
+        let steps = answer["output"]["steps"].as_array().unwrap();
+        assert_eq!(
+            steps[0],
+            json!({"outcome": null, "close": false, "replies": []}),
+            "a message that does not verify before any manifest"
+        );
+        let offer =
+            envelope::decode_message(&unhex(steps[1]["message"].as_str().unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(offer.kind, Kind::Offer);
+        assert_eq!(
+            hex(&offer.sender),
+            hex(&ed25519::public_key_of(&SigningSeed::new([0x11; 32])))
+        );
+        assert!(signing::verify_live_message(
+            &unhex(steps[1]["message"].as_str().unwrap()).unwrap(),
+            &offer.sender
+        ));
+        assert_eq!(steps[2], json!({"replies": []}));
+        assert_eq!(steps[3], json!({}));
+        assert_eq!(steps[4], json!({"accepted": false}));
+        assert_eq!(steps[5], json!({"outcome": null}));
+        assert_eq!(steps[6], json!({"record": null}));
+        assert_eq!(steps[7], json!({"errors": []}));
+        let bad = ask("session", json!({"app": app, "steps": [{"dance": true}]}));
+        assert!(bad["failure"].is_string());
     }
 }
