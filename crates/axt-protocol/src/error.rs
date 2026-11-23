@@ -155,6 +155,12 @@ impl Error {
         }
     }
 
+    /// A failure of the app's store, such as the error of a [`crate::Store`] method.
+    #[must_use]
+    pub fn store(error: impl std::error::Error + Send + Sync + 'static) -> Self {
+        Self::Store(Box::new(error))
+    }
+
     /// The AXT error code, or `None` for a failure of the store.
     #[must_use]
     pub fn code(&self) -> Option<ErrorCode> {

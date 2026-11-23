@@ -3,7 +3,7 @@
 //! Behind the feature `conformance`, which only the crate `axt-conformance-adapter` turns on.
 //! It is a test tool, not part of the public API.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -19,6 +19,11 @@ use crate::error::{Error, ErrorCode};
 use crate::keys::{EncryptionSeed, SigningSeed};
 use crate::manifest;
 use crate::record_decoder;
+use crate::records::{
+    self, Applied, DeleteWithLocalChanges, ElementKey, ElementMerge, HeldRecord, HeldState,
+    LocalChanges, RecordKind, RecordMessage, RecordPolicy,
+};
+use crate::relation_index::{HeldRelation, RelationResolver};
 use crate::schema::Schema;
 use crate::sealing;
 use crate::signing;
@@ -28,8 +33,9 @@ use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClo
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] =
-    &["encoding", "bricks", "types", "time", "keys", "manifest"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] = &[
+    "encoding", "bricks", "types", "time", "keys", "manifest", "records",
+];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -142,6 +148,8 @@ fn operation(op: &str) -> Option<Operation> {
         "open" => open,
         "check_manifest" => check_manifest,
         "fit" => fit,
+        "apply" => apply,
+        "relations" => relations,
         _ => return None,
     })
 }
@@ -550,6 +558,7 @@ fn device_sets(input: &Map<String, Json>) -> Result<Json, Failure> {
     let mut receiver = DeviceSetReceiver {
         senders: senders.iter().map(known_sender).collect::<Result<_, _>>()?,
         refused: keys(input.get("refused"))?,
+        ..DeviceSetReceiver::default()
     };
     let mut results = Vec::with_capacity(steps.len());
     for step in steps {
@@ -569,6 +578,313 @@ fn device_sets(input: &Map<String, Json>) -> Result<Json, Failure> {
         }));
     }
     Ok(json!({"steps": results}))
+}
+
+/// `relations` (section 5.3): a receiver that resolves the relations it holds across
+/// senders while it follows the devices of its known senders.
+fn relations(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let (Some(senders), Some(relations), Some(steps)) = (
+        input.get("senders").and_then(Json::as_array),
+        input.get("relations").and_then(Json::as_array),
+        input.get("steps").and_then(Json::as_array),
+    ) else {
+        return Err(Failure::BadRequest(
+            "senders, relations and steps must be lists".into(),
+        ));
+    };
+    let mut receiver = DeviceSetReceiver {
+        senders: senders.iter().map(known_sender).collect::<Result<_, _>>()?,
+        refused: keys(input.get("refused"))?,
+        ..DeviceSetReceiver::default()
+    };
+    let own = known_sender(input.get("own").unwrap_or(&Json::Null))?;
+    let held = relations
+        .iter()
+        .map(|relation| {
+            let relation = relation
+                .as_object()
+                .ok_or_else(|| Failure::BadRequest("a relation is not an object".into()))?;
+            let holder = object(relation, "holder")?;
+            let target = object(relation, "target")?;
+            Ok(HeldRelation {
+                id: string(relation, "id")?.to_owned(),
+                holder_sender: string(holder, "sender")?.to_owned(),
+                holder_id: string(holder, "id")?.to_owned(),
+                target_sender: match target.get("sender") {
+                    None | Some(Json::Null) => None,
+                    Some(sender) => Some(key(sender)?),
+                },
+                target_id: string(target, "id")?.to_owned(),
+            })
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let mut results = Vec::with_capacity(steps.len());
+    for step in steps {
+        let step = step
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("a step is no object".into()))?;
+        if step.contains_key("chain") {
+            let outcome = receiver.receive_chain(&chain(step.get("chain"))?);
+            results.push(json!({
+                "results": outcome.into_iter().map(|r| r.code()).collect::<Vec<_>>(),
+            }));
+            continue;
+        }
+        let resolver = RelationResolver {
+            receiver: &receiver,
+            own: &own,
+        };
+        results.push(json!({
+            "relations": held.iter().map(|relation| {
+                let resolution = resolver.resolve(relation);
+                json!({
+                    "id": relation.id,
+                    "sender": resolution.sender,
+                    "resolved": resolution.resolved,
+                })
+            }).collect::<Vec<_>>(),
+            "linked_from": resolver.linked_from(&held).into_iter().map(|linked| json!({
+                "sender": linked.sender,
+                "id": linked.id,
+                "from": linked.from.into_iter().map(|from| json!({
+                    "sender": from.sender,
+                    "id": from.id,
+                    "relation": from.relation,
+                })).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        }));
+    }
+    Ok(json!({"steps": results}))
+}
+
+/// A policy of `apply` (section 5.3) and of `receive` (section 5.15).
+fn record_policy(value: Option<&Json>) -> Result<RecordPolicy, Failure> {
+    let value = value
+        .and_then(Json::as_object)
+        .ok_or_else(|| Failure::BadRequest("policy is not an object".into()))?;
+    let removal = |name: &str| match value.get(name).and_then(Json::as_str) {
+        Some("delete") => Ok(DeleteWithLocalChanges::Delete),
+        Some("keep") => Ok(DeleteWithLocalChanges::Keep),
+        other => Err(Failure::BadRequest(format!(
+            "no policy {other:?} for {name}"
+        ))),
+    };
+    Ok(RecordPolicy {
+        local_changes: match value.get("local_changes").and_then(Json::as_str) {
+            Some("per_field") => LocalChanges::PerField,
+            Some("whole_record_keep") => LocalChanges::WholeRecordKeep,
+            Some("whole_record_take") => LocalChanges::WholeRecordTake,
+            other => return Err(Failure::BadRequest(format!("no policy {other:?}"))),
+        },
+        delete_with_local_changes: removal("delete_with_local_changes")?,
+        withdraw_with_local_changes: match value.get("withdraw_with_local_changes") {
+            None | Some(Json::Null) => None,
+            Some(_) => Some(removal("withdraw_with_local_changes")?),
+        },
+    })
+}
+
+/// A record value of `apply` in the form of section 3.3, read by its shape, as the input
+/// has no schema: objects as records, integers as longs, and the data of an extension,
+/// an object of exactly `name` and `data`, as bytes.
+fn shaped_value(json: &Json) -> Result<Value, Failure> {
+    Ok(match json {
+        Json::Null => Value::Null,
+        Json::Bool(b) => Value::Boolean(*b),
+        Json::Number(n) => match n.as_i64() {
+            Some(i) => Value::Long(i),
+            None => Value::Double(n.as_f64().unwrap_or_default()),
+        },
+        Json::String(s) => Value::String(s.clone()),
+        Json::Array(items) => {
+            Value::Array(items.iter().map(shaped_value).collect::<Result<_, _>>()?)
+        }
+        Json::Object(members) => {
+            if let (2, Some(Json::String(name)), Some(Json::String(data))) =
+                (members.len(), members.get("name"), members.get("data"))
+            {
+                return Ok(Value::Record(vec![
+                    ("name".into(), Value::String(name.clone())),
+                    ("data".into(), Value::Bytes(unhex(data)?)),
+                ]));
+            }
+            Value::Record(
+                members
+                    .iter()
+                    .map(|(name, v)| Ok((name.clone(), shaped_value(v)?)))
+                    .collect::<Result<_, Failure>>()?,
+            )
+        }
+    })
+}
+
+/// The key of `element` when it is an element of a list merged per element: a relation
+/// or an extension, told by its shape.
+fn element_key_of(element: &Value) -> Option<ElementKey> {
+    match element {
+        Value::Record(_)
+            if matches!(element.field("id"), Some(Value::String(_)))
+                && matches!(element.field("target"), Some(Value::Record(_))) =>
+        {
+            Some(ElementKey::Id)
+        }
+        Value::Record(fields)
+            if fields.len() == 2
+                && matches!(element.field("name"), Some(Value::String(_)))
+                && matches!(element.field("data"), Some(Value::Bytes(_))) =>
+        {
+            Some(ElementKey::Name)
+        }
+        _ => None,
+    }
+}
+
+/// The lists of `values` merged per element: those that hold relations or extensions.
+fn element_lists(values: &[Option<&Value>]) -> HashMap<String, ElementKey> {
+    let mut lists = HashMap::new();
+    for value in values.iter().flatten() {
+        if let Value::Record(fields) = value {
+            for (name, field) in fields {
+                if let Value::Array(items) = field {
+                    for key in items.iter().filter_map(element_key_of) {
+                        lists.insert(name.clone(), key);
+                    }
+                }
+            }
+        }
+    }
+    lists
+}
+
+/// The result of one record message of `apply`.
+fn applied_json(applied: &Applied) -> Json {
+    json!({
+        "outcome": applied.outcome.as_str(),
+        "receiver_version": applied.held.version,
+        "kept_fields": applied.kept_fields,
+        "state": applied.held.state.code(),
+        "value": applied.value.as_ref().map_or(Json::Null, value_json),
+    })
+}
+
+/// A record key of the input, or the rejection of the library.
+fn input_record_key(input: &Map<String, Json>) -> Result<String, Failure> {
+    Ok(records::checked_record_key(string(input, "id")?)?)
+}
+
+/// `apply` (section 5.3): one receiver and the records of one sender, starting empty
+/// (`spec/records.md`, sections 5 to 7); its user's changes are kept as the current
+/// values.
+fn apply(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let policy = record_policy(input.get("policy"))?;
+    let events = input
+        .get("events")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("events is no list".into()))?;
+    let mut writers = HashMap::new();
+    let mut own = HashMap::new();
+    for text in input
+        .get("extensions")
+        .and_then(Json::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+    {
+        let text = text
+            .as_str()
+            .ok_or_else(|| Failure::BadRequest("an extension is no schema text".into()))?;
+        let schema = Schema::parse(text)?;
+        writers.insert(schema.fingerprint().0, schema.clone());
+        own.insert(schema.type_name(), schema);
+    }
+    let mut held: HashMap<String, HeldRecord> = HashMap::new();
+    let mut current: HashMap<String, Value> = HashMap::new();
+    let mut steps = Vec::with_capacity(events.len());
+    for event in events {
+        let event = event
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("an event is no object".into()))?;
+        if let Some(take) = event.get("local_take").and_then(Json::as_object) {
+            let key = input_record_key(take)?;
+            let applied = held
+                .get(&key)
+                .and_then(records::take_kept_removal)
+                .ok_or_else(|| Failure::BadRequest("nothing kept to take".into()))?;
+            held.insert(key.clone(), applied.held.clone());
+            current.remove(&key);
+            steps.push(applied_json(&applied));
+        } else if let Some(change) = event.get("local_change").and_then(Json::as_object) {
+            let key = input_record_key(change)?;
+            let value = shaped_value(change.get("value").unwrap_or(&Json::Null))?;
+            let record = current
+                .entry(key)
+                .or_insert_with(|| Value::Record(Vec::new()));
+            records::set_field(record, string(change, "field")?, value);
+            steps.push(json!({}));
+        } else if let Some(delete) = event.get("local_delete").and_then(Json::as_object) {
+            let key = input_record_key(delete)?;
+            let record = held
+                .get_mut(&key)
+                .ok_or_else(|| Failure::BadRequest("no record to delete".into()))?;
+            record.state = HeldState::DeletedByUser;
+            record.taken = None;
+            record.kept_against = None;
+            current.remove(&key);
+            steps.push(json!({}));
+        } else if let Some(message) = event.get("message").and_then(Json::as_object) {
+            let key = match input_record_key(message) {
+                Ok(key) => key,
+                Err(Failure::Library(e)) => {
+                    steps.push(json!({"error": e.code().map(ErrorCode::as_str)}));
+                    continue;
+                }
+                Err(e) => return Err(e),
+            };
+            let version = integer(message, "version")?;
+            let kind = match message.get("kind").and_then(Json::as_str) {
+                Some("DATA") => RecordKind::Data,
+                Some("DELETE") => RecordKind::Delete,
+                Some("WITHDRAW") => RecordKind::Withdraw,
+                other => return Err(Failure::BadRequest(format!("no record kind {other:?}"))),
+            };
+            let value = match message.get("value") {
+                None | Some(Json::Null) => None,
+                Some(value) => Some(shaped_value(value)?),
+            };
+            let was = held.get(&key);
+            let user = current.get(&key);
+            let elements = ElementMerge {
+                lists: element_lists(&[value.as_ref(), user, was.and_then(|h| h.taken.as_ref())]),
+                writers: writers.clone(),
+                own: own.clone(),
+            };
+            let applied = records::apply_record_message(
+                was,
+                user,
+                RecordMessage {
+                    kind,
+                    version,
+                    type_name: message.get("type").and_then(Json::as_str),
+                    value: value.as_ref(),
+                },
+                &policy,
+                &elements,
+            );
+            match applied {
+                Ok(applied) => {
+                    steps.push(applied_json(&applied));
+                    match &applied.value {
+                        Some(value) => current.insert(key.clone(), value.clone()),
+                        None => current.remove(&key),
+                    };
+                    held.insert(key, applied.held);
+                }
+                Err(e) => steps.push(json!({"error": e.code().map(ErrorCode::as_str)})),
+            }
+        } else {
+            return Err(Failure::BadRequest("an event of no known form".into()));
+        }
+    }
+    Ok(json!({"steps": steps}))
 }
 
 /// `padded_length` (section 5.5): the padded length P(n).
@@ -785,8 +1101,99 @@ mod tests {
         let answer = ask("hello", json!({"format": 1}));
         assert_eq!(
             answer["output"]["categories"],
-            json!(["encoding", "bricks", "types", "time", "keys", "manifest"])
+            json!([
+                "encoding", "bricks", "types", "time", "keys", "manifest", "records"
+            ])
         );
+    }
+
+    #[test]
+    fn the_adapter_plays_a_session_of_apply() {
+        let id = "3f2c8a5e-9b1d-4c7e-8a6f-2d4b5c6e7f80";
+        let policy = json!({
+            "local_changes": "whole_record_keep",
+            "delete_with_local_changes": "delete",
+        });
+        let reply = ask(
+            "apply",
+            json!({
+                "policy": policy,
+                "events": [
+                    {"message": {"kind": "DATA", "id": id, "version": 1, "type": "a.M",
+                        "value": {"t": "a", "e": [{"name": "a.E", "data": "c301"}]}}},
+                    {"local_change": {"id": id, "field": "t", "value": "b"}},
+                    {"local_delete": {"id": id}},
+                    {"message": {"kind": "WITHDRAW", "id": id, "version": 2}},
+                    {"message": {"kind": "DELETE", "id": "x", "version": 2}},
+                ],
+            }),
+        );
+        let steps = reply["output"]["steps"].as_array().unwrap();
+        assert_eq!(
+            steps[0]["value"]["e"],
+            json!([{"name": "a.E", "data": "c301"}])
+        );
+        assert_eq!(steps[1], json!({}));
+        assert_eq!(steps[3]["outcome"], "WITHDRAWN");
+        assert_eq!(steps[3]["state"], "deleted_by_user");
+        assert_eq!(steps[4], json!({"error": "RECORD_ID_INVALID"}));
+        let session = |policy: &Json, events: Json| json!({"policy": policy, "events": events});
+        for bad in [
+            json!({"policy": 1, "events": []}),
+            json!({"policy": {"local_changes": "x", "delete_with_local_changes": "delete"},
+                "events": []}),
+            json!({"policy": {"local_changes": "per_field", "delete_with_local_changes": "x"},
+                "events": []}),
+            json!({"policy": policy, "events": 1}),
+            session(&policy, json!([1])),
+            session(&policy, json!([{}])),
+            session(&policy, json!([{"local_delete": {"id": id}}])),
+            session(&policy, json!([{"local_take": {"id": id}}])),
+            session(
+                &policy,
+                json!([{"message": {"kind": "X", "id": id, "version": 1}}]),
+            ),
+            session(
+                &policy,
+                json!([{"message": {"kind": "DATA", "id": id, "version": "1"}}]),
+            ),
+        ] {
+            assert!(ask("apply", bad.clone())["failure"].is_string(), "{bad}");
+        }
+        let kept = ask(
+            "apply",
+            json!({
+                "policy": {"local_changes": "per_field", "delete_with_local_changes": "keep"},
+                "events": [
+                    {"message": {"kind": "DATA", "id": id, "version": 1, "type": "a.M",
+                        "value": {"t": "a"}}},
+                    {"local_change": {"id": id, "field": "t", "value": "b"}},
+                    {"message": {"kind": "DELETE", "id": id, "version": 2}},
+                    {"local_take": {"id": id}},
+                ],
+            }),
+        );
+        let steps = kept["output"]["steps"].as_array().unwrap();
+        assert_eq!(steps[2]["outcome"], "KEPT");
+        assert_eq!(steps[3]["outcome"], "APPLIED");
+        assert_eq!(steps[3]["state"], "tombstone");
+    }
+
+    #[test]
+    fn a_request_relations_cannot_read_is_a_failure() {
+        let own = json!({"name": "me", "current": [], "removed": [], "records": []});
+        for bad in [
+            json!({"own": own, "senders": [], "refused": [], "relations": 1, "steps": []}),
+            json!({"own": 1, "senders": [], "refused": [], "relations": [], "steps": []}),
+            json!({"own": own, "senders": [], "refused": [], "relations": [{"id": "r"}],
+                "steps": []}),
+            json!({"own": own, "senders": [], "refused": [], "relations": [], "steps": [1]}),
+        ] {
+            assert!(
+                ask("relations", bad.clone())["failure"].is_string(),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

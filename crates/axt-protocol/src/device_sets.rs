@@ -233,12 +233,32 @@ pub(crate) struct DeviceSetReceiver {
     pub(crate) senders: Vec<KnownSender>,
     /// The receiver's refused keys (section 3.4).
     pub(crate) refused: BTreeSet<Key>,
+    /// The senders that joined another, by name: the name of the one that stays.
+    pub(crate) joined_into: BTreeMap<String, String>,
 }
 
 impl DeviceSetReceiver {
     /// The position of the known sender of which `key` is a key, current or removed.
     fn sender_of(&self, key: &Key) -> Option<usize> {
         self.senders.iter().position(|sender| sender.has(key))
+    }
+
+    /// The known sender of which `key` is a key, current or removed.
+    pub(crate) fn sender_of_key(&self, key: &Key) -> Option<&KnownSender> {
+        self.sender_of(key).and_then(|i| self.senders.get(i))
+    }
+
+    /// The name of the sender of `name` now: the one it joined, or itself.
+    pub(crate) fn sender_named<'a>(&'a self, name: &'a str) -> &'a str {
+        let mut current = name;
+        // Each step follows one join; more steps than joins would be a loop.
+        for _ in 0..=self.joined_into.len() {
+            match self.joined_into.get(current) {
+                Some(next) => current = next,
+                None => break,
+            }
+        }
+        current
     }
 
     /// What `key` is to the receiver.
@@ -433,6 +453,8 @@ impl DeviceSetReceiver {
         let Some(staying) = self.senders.get_mut(stays) else {
             return;
         };
+        self.joined_into
+            .insert(joining.name.clone(), staying.name.clone());
         staying.current.extend(joining.current);
         staying.removed.extend(joining.removed);
         for (id, record) in joining.records {
@@ -710,7 +732,7 @@ mod tests {
     fn receiver(senders: Vec<KnownSender>) -> DeviceSetReceiver {
         DeviceSetReceiver {
             senders,
-            refused: BTreeSet::new(),
+            ..DeviceSetReceiver::default()
         }
     }
 
@@ -799,6 +821,20 @@ mod tests {
         assert_eq!(r.senders[0].records["r1"].version, 3);
         assert_eq!(r.senders[0].records["r1"].state, RecordState::Tombstone);
         assert_eq!(r.senders[0].records["r2"].version, 1);
+        assert_eq!(r.sender_named("t"), "s");
+        assert_eq!(r.sender_named("s"), "s");
+        assert_eq!(
+            r.sender_of_key(&c.public).map(|s| s.name.as_str()),
+            Some("s")
+        );
+    }
+
+    #[test]
+    fn a_loop_of_joins_ends() {
+        let mut r = receiver(vec![]);
+        r.joined_into.insert("a".into(), "b".into());
+        r.joined_into.insert("b".into(), "a".into());
+        let _ = r.sender_named("a");
     }
 
     #[test]
