@@ -1,0 +1,43 @@
+# Fuzz targets: the conformance adapter's answer to one request, the way axt-dart fuzzes it.
+# Not part of the workspace: it needs cargo-fuzz and -Z sanitizer. Run: cargo fuzz run <target>
+# (from the repository root).
+[package]
+name = "axt-protocol-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.13"
+serde_json = "1.0.154"
+axt-protocol = { path = "../crates/axt-protocol", features = ["conformance"] }
+
+[[bin]]
+name = "adapter_answer"
+path = "fuzz_targets/adapter_answer.rs"
+test = false
+doc = false
+bench = false
+
+# The lint set of paxel/gates (configs/rust/lints.toml).
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+arithmetic_side_effects = "deny"
+dbg_macro = "deny"
+allow_attributes = "deny"
+
+# Standalone: the root workspace excludes it.
+[workspace]

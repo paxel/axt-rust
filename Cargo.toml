@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/axt-protocol", "crates/axt-protocol-generate", "crates/axt-conformance-adapter"]
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.1.0"

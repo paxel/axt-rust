@@ -11,7 +11,13 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+# The answers of the conformance adapter (AXT spec/conformance.md, section 6). Only the
+# crate axt-conformance-adapter turns it on; it is not part of the public API.
+conformance = ["dep:serde_json"]
+
 [dependencies]
+serde_json = { version = "1.0.154", optional = true }
 
 [lints]
 workspace = true
