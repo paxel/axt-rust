@@ -3,21 +3,31 @@
 //! Behind the feature `conformance`, which only the crate `axt-conformance-adapter` turns on.
 //! It is a test tool, not part of the public API.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
 use crate::bricks::{self, Kind as Brick};
+use crate::device_sets::{
+    self, DeviceChange, DeviceSetReceiver, JoinAction, KeptRecord, Key, KnownSender, Member,
+    RecordState,
+};
+use crate::ed25519;
 use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
+use crate::keys::{EncryptionSeed, SigningSeed};
 use crate::record_decoder;
 use crate::schema::Schema;
+use crate::sealing;
+use crate::signing;
 use crate::type_description::TypeDescription;
 use crate::value::Value;
 use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClock, Zoned};
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types", "time"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types", "time", "keys"];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -114,6 +124,20 @@ fn operation(op: &str) -> Option<Operation> {
         "check_record" => check_record,
         "resolve_date_time" => resolve_date_time,
         "add_duration" => add_duration,
+        "public_key" => public_key,
+        "sign" => sign,
+        "verify" => verify,
+        "check_signing_key" => check_signing_key,
+        "check_encryption_key" => check_encryption_key,
+        "short_fingerprint" => short_fingerprint,
+        "verify_message" => verify_message,
+        "device_add" => device_add,
+        "device_join" => device_join,
+        "join_chain" => join_chain,
+        "device_sets" => device_sets,
+        "padded_length" => padded_length,
+        "seal" => seal,
+        "open" => open,
         _ => return None,
     })
 }
@@ -291,6 +315,291 @@ fn add_duration(input: &Map<String, Json>) -> Result<Json, Failure> {
     Ok(accept(json!({"date_time": date_time_json(&sum)})))
 }
 
+/// A rejection with `code`, as an operation's result.
+fn reject(code: ErrorCode) -> Failure {
+    Failure::Library(Error::axt(code, code.as_str()))
+}
+
+/// `public_key` (section 5.5): the Ed25519 public key of a seed.
+fn public_key(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let seed = SigningSeed::new(sized(input, "seed")?);
+    Ok(accept(
+        json!({"public_key": hex(&ed25519::public_key_of(&seed))}),
+    ))
+}
+
+/// `sign` (section 5.5): the Ed25519 signature of data with a seed.
+fn sign(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let seed = SigningSeed::new(sized(input, "seed")?);
+    let signature = ed25519::sign(&seed, &bytes(input.get("data"))?);
+    Ok(accept(json!({"signature": hex(&signature)})))
+}
+
+/// `verify` (section 5.5): the strict verification of a signature.
+fn verify(input: &Map<String, Json>) -> Result<Json, Failure> {
+    if ed25519::verify_strict(
+        &bytes(input.get("public_key"))?,
+        &bytes(input.get("data"))?,
+        &bytes(input.get("signature"))?,
+    ) {
+        Ok(accept(json!({})))
+    } else {
+        Err(reject(ErrorCode::SignatureInvalid))
+    }
+}
+
+/// `check_signing_key` (section 5.5): whether a public key passes steps 2 and 3.
+fn check_signing_key(input: &Map<String, Json>) -> Result<Json, Failure> {
+    if ed25519::is_point_of_order_l(&bytes(input.get("public_key"))?) {
+        Ok(accept(json!({})))
+    } else {
+        Err(reject(ErrorCode::KeyInvalid))
+    }
+}
+
+/// `check_encryption_key` (section 5.5): whether an X25519 key is not of small order.
+fn check_encryption_key(input: &Map<String, Json>) -> Result<Json, Failure> {
+    if sealing::is_small_order_encryption_key(&bytes(input.get("encryption_key"))?) {
+        Err(reject(ErrorCode::EncryptionKeyInvalid))
+    } else {
+        Ok(accept(json!({})))
+    }
+}
+
+/// `short_fingerprint` (section 5.5): the short fingerprint of a public key.
+fn short_fingerprint(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let fingerprint = signing::short_fingerprint(&bytes(input.get("public_key"))?);
+    Ok(accept(json!({"short_fingerprint": fingerprint})))
+}
+
+/// `verify_message` (section 5.5): whether a live message's signature verifies with its
+/// sender.
+fn verify_message(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let message = bytes(input.get("message"))?;
+    let envelope = envelope::decode_message(&message)?;
+    if signing::verify_live_message(&message, &envelope.sender) {
+        Ok(accept(json!({})))
+    } else {
+        Err(reject(ErrorCode::SignatureInvalid))
+    }
+}
+
+/// `device_add` (section 5.5): steps 1 and 2 of a `DEVICE_ADD`.
+fn device_add(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let change = DeviceChange::decode(&bytes(input.get("message"))?)?;
+    if !change.is_add() {
+        return Err(Failure::BadRequest("not a DEVICE_ADD".into()));
+    }
+    if !change.signature_verifies() {
+        return Err(reject(ErrorCode::SignatureInvalid));
+    }
+    if !change.device_verifies() {
+        return Err(reject(ErrorCode::DeviceRejected));
+    }
+    Ok(accept(json!({
+        "member": hex(&change.signer),
+        "device": hex(&change.device),
+    })))
+}
+
+/// A key of 32 bytes in hexadecimal digits.
+fn key(value: &Json) -> Result<Key, Failure> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| Failure::BadRequest("a key is not a string".into()))?;
+    unhex(text)?
+        .as_slice()
+        .try_into()
+        .map_err(|_| Failure::BadRequest("a key is not 32 bytes".into()))
+}
+
+/// A list of keys.
+fn keys(value: Option<&Json>) -> Result<BTreeSet<Key>, Failure> {
+    value
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("keys are not a list of strings".into()))?
+        .iter()
+        .map(key)
+        .collect()
+}
+
+/// `device_join` (section 5.5): what a member does with a `DEVICE_JOIN`.
+fn device_join(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let message = bytes(input.get("message"))?;
+    let member = object(input, "member")?;
+    let member_key = key(member
+        .get("key")
+        .ok_or_else(|| Failure::BadRequest("member has no key".into()))?)?;
+    let current = keys(member.get("current"))?;
+    let removed = keys(member.get("removed"))?;
+    let first = match input.get("first") {
+        None | Some(Json::Null) => None,
+        Some(first) => Some(key(first)?),
+    };
+    let member = Member {
+        key: &member_key,
+        current: &current,
+        removed: &removed,
+    };
+    let action = device_sets::answer_device_join(&message, &member, first.as_ref())?;
+    Ok(accept(json!({
+        "device": hex(&envelope::decode_message(&message)?.sender),
+        "action": match action {
+            JoinAction::Ask => "ask",
+            JoinAction::SendChain => "send_chain",
+            JoinAction::Ignore => "ignore",
+        },
+    })))
+}
+
+/// A chain: a list of messages.
+fn chain(value: Option<&Json>) -> Result<Vec<Vec<u8>>, Failure> {
+    value
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("chain is not a list".into()))?
+        .iter()
+        .map(|message| bytes(Some(message)))
+        .collect()
+}
+
+/// `join_chain` (section 5.5): whether a new device takes the chain it is sent.
+fn join_chain(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let member = key(input.get("member").unwrap_or(&Json::Null))?;
+    let device = key(input.get("device").unwrap_or(&Json::Null))?;
+    if device_sets::takes_join_chain(&chain(input.get("chain"))?, &member, &device) {
+        Ok(accept(json!({})))
+    } else {
+        Err(reject(ErrorCode::JoinInvalid))
+    }
+}
+
+/// A known sender in the JSON form of the vectors.
+fn known_sender(value: &Json) -> Result<KnownSender, Failure> {
+    let value = value
+        .as_object()
+        .ok_or_else(|| Failure::BadRequest("a sender is not an object".into()))?;
+    let records = value
+        .get("records")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("records is no list".into()))?
+        .iter()
+        .map(|record| {
+            let record = record
+                .as_object()
+                .ok_or_else(|| Failure::BadRequest("a record is not an object".into()))?;
+            let state = match record.get("state").and_then(Json::as_str) {
+                Some("tombstone") => RecordState::Tombstone,
+                _ => RecordState::There,
+            };
+            Ok((
+                string(record, "id")?.to_owned(),
+                KeptRecord {
+                    version: integer(record, "version")?,
+                    state,
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, Failure>>()?;
+    Ok(KnownSender {
+        name: string(value, "name")?.to_owned(),
+        current: keys(value.get("current"))?,
+        removed: keys(value.get("removed"))?,
+        records,
+    })
+}
+
+/// The receiver's senders in the JSON form of the vectors, sorted by name.
+fn senders_json(receiver: &DeviceSetReceiver) -> Json {
+    let mut senders: Vec<&KnownSender> = receiver.senders.iter().collect();
+    senders.sort_by(|a, b| a.name.cmp(&b.name));
+    let keys_json = |keys: &BTreeSet<Key>| keys.iter().map(|k| hex(k)).collect::<Vec<_>>();
+    senders
+        .into_iter()
+        .map(|sender| {
+            json!({
+                "name": sender.name,
+                "current": keys_json(&sender.current),
+                "removed": keys_json(&sender.removed),
+                "records": sender.records.iter().map(|(id, record)| json!({
+                    "id": id,
+                    "version": record.version,
+                    "state": match record.state {
+                        RecordState::There => "there",
+                        RecordState::Tombstone => "tombstone",
+                    },
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+/// `device_sets` (section 5.5): a receiver that takes chains of additions and removals.
+fn device_sets(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let (Some(senders), Some(steps)) = (
+        input.get("senders").and_then(Json::as_array),
+        input.get("steps").and_then(Json::as_array),
+    ) else {
+        return Err(Failure::BadRequest(
+            "senders and steps must be lists".into(),
+        ));
+    };
+    let mut receiver = DeviceSetReceiver {
+        senders: senders.iter().map(known_sender).collect::<Result<_, _>>()?,
+        refused: keys(input.get("refused"))?,
+    };
+    let mut results = Vec::with_capacity(steps.len());
+    for step in steps {
+        let step = step
+            .as_object()
+            .ok_or_else(|| Failure::BadRequest("a step is no object".into()))?;
+        let outcome = receiver.receive_chain(&chain(step.get("chain"))?);
+        let step_key = match step.get("key") {
+            None | Some(Json::Null) => None,
+            Some(value) => Some(key(value)?),
+        };
+        results.push(json!({
+            "results": outcome.into_iter().map(|r| r.code()).collect::<Vec<_>>(),
+            "key_state": step_key.map(|k| receiver.state_of(&k).name()),
+            "key_sender": step_key.and_then(|k| receiver.current_sender_of(&k).map(|s| s.name.clone())),
+            "senders": senders_json(&receiver),
+        }));
+    }
+    Ok(json!({"steps": results}))
+}
+
+/// `padded_length` (section 5.5): the padded length P(n).
+fn padded_length(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let length = input
+        .get("length")
+        .and_then(Json::as_u64)
+        .ok_or_else(|| Failure::BadRequest("length is no integer".into()))?;
+    let padded = sealing::padded_length(length)
+        .ok_or_else(|| Failure::BadRequest("the padded length is out of range".into()))?;
+    Ok(accept(json!({"padded_length": padded})))
+}
+
+/// `seal` (section 5.5): a message sealed for an encryption key.
+fn seal(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let sealed = sealing::seal(
+        &bytes(input.get("message"))?,
+        &sized(input, "encryption_key")?,
+    )?;
+    Ok(accept(json!({"sealed": hex(&sealed)})))
+}
+
+/// `open` (section 5.5): a sealed message opened with the first private key that opens it.
+fn open(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let private_keys = input
+        .get("private_keys")
+        .and_then(Json::as_array)
+        .ok_or_else(|| Failure::BadRequest("private_keys is no list".into()))?
+        .iter()
+        .map(|k| key(k).map(EncryptionSeed::new))
+        .collect::<Result<Vec<_>, _>>()?;
+    let message = sealing::open(&bytes(input.get("sealed"))?, &private_keys)?;
+    Ok(accept(json!({"message": hex(&message)})))
+}
+
 /// The member `date_time` of the input: a `DateTime` with either all of `zone`,
 /// `offset_seconds` and `instant_ms` or none of them.
 fn date_time(input: &Map<String, Json>) -> Result<DateTime, Failure> {
@@ -447,7 +756,7 @@ mod tests {
         let answer = ask("hello", json!({"format": 1}));
         assert_eq!(
             answer["output"]["categories"],
-            json!(["encoding", "bricks", "types", "time"])
+            json!(["encoding", "bricks", "types", "time", "keys"])
         );
     }
 
@@ -520,6 +829,163 @@ mod tests {
             json!({"date_time": floating, "duration": hour}),
         );
         assert!(answer.get("failure").is_some());
+    }
+
+    #[test]
+    fn public_key_sign_and_verify() {
+        let seed = "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60";
+        let public = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a";
+        let answer = ask("public_key", json!({"seed": seed}));
+        assert_eq!(answer["output"], json!({"accept": {"public_key": public}}));
+        let answer = ask("sign", json!({"seed": seed, "data": ""}));
+        let signature = answer["output"]["accept"]["signature"].clone();
+        let answer = ask(
+            "verify",
+            json!({"public_key": public, "data": "", "signature": signature}),
+        );
+        assert_eq!(answer["output"], json!({"accept": {}}));
+        let answer = ask(
+            "verify",
+            json!({"public_key": public, "data": "01", "signature": signature}),
+        );
+        assert_eq!(
+            answer["output"],
+            json!({"reject": {"error": "SIGNATURE_INVALID"}})
+        );
+        // A wrong length is a rejection, not a failure.
+        let answer = ask(
+            "verify",
+            json!({"public_key": "00", "data": "", "signature": signature}),
+        );
+        assert_eq!(
+            answer["output"],
+            json!({"reject": {"error": "SIGNATURE_INVALID"}})
+        );
+        assert!(
+            ask("public_key", json!({"seed": "00"}))
+                .get("failure")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn the_checks_of_keys_and_the_short_fingerprint() {
+        let old = "1b84a600f3503e22bbcc99e63202a7194bf6bd69aff1471cce6410d53c26ec4a";
+        let answer = ask("check_signing_key", json!({"public_key": old}));
+        assert_eq!(answer["output"], json!({"accept": {}}));
+        let answer = ask("check_signing_key", json!({"public_key": hex(&[0; 32])}));
+        assert_eq!(
+            answer["output"],
+            json!({"reject": {"error": "KEY_INVALID"}})
+        );
+        let answer = ask(
+            "check_encryption_key",
+            json!({"encryption_key": hex(&[0; 32])}),
+        );
+        assert_eq!(
+            answer["output"],
+            json!({"reject": {"error": "ENCRYPTION_KEY_INVALID"}})
+        );
+        let answer = ask("short_fingerprint", json!({"public_key": old}));
+        assert_eq!(
+            answer["output"],
+            json!({"accept": {"short_fingerprint": "24773 42899 01908 98427 81734"}})
+        );
+    }
+
+    #[test]
+    fn device_changes_joins_and_chains() {
+        use crate::device_sets::fixtures::{TestKey, device_add, device_join, tampered};
+        let a = TestKey::named("a");
+        let b = TestKey::named("b");
+        let add = hex(&device_add(&a, &b));
+        let answer = ask("device_add", json!({"message": add}));
+        assert_eq!(
+            answer["output"],
+            json!({"accept": {"member": hex(&a.public), "device": hex(&b.public)}})
+        );
+        let answer = ask(
+            "device_add",
+            json!({"message": hex(&tampered(device_add(&a, &b)))}),
+        );
+        assert_eq!(
+            answer["output"],
+            json!({"reject": {"error": "SIGNATURE_INVALID"}})
+        );
+        let member = json!({"key": hex(&a.public), "current": [], "removed": []});
+        let join = hex(&device_join(&b, &a, None));
+        let answer = ask(
+            "device_join",
+            json!({"message": join, "member": member, "first": null}),
+        );
+        assert_eq!(
+            answer["output"],
+            json!({"accept": {"device": hex(&b.public), "action": "ask"}})
+        );
+        let input = json!({"chain": [add], "member": hex(&a.public), "device": hex(&b.public)});
+        assert_eq!(ask("join_chain", input)["output"], json!({"accept": {}}));
+        let input = json!({"chain": [], "member": hex(&a.public), "device": hex(&b.public)});
+        assert_eq!(
+            ask("join_chain", input)["output"],
+            json!({"reject": {"error": "JOIN_INVALID"}})
+        );
+    }
+
+    #[test]
+    fn a_device_sets_session_answers_each_step() {
+        use crate::device_sets::fixtures::{TestKey, device_add};
+        let a = TestKey::named("a");
+        let b = TestKey::named("b");
+        let input = json!({
+            "senders": [{
+                "name": "s",
+                "current": [hex(&a.public)],
+                "removed": [],
+                "records": [{"id": "r1", "version": 2, "state": "tombstone"}],
+            }],
+            "refused": [],
+            "steps": [
+                {"chain": [hex(&device_add(&a, &b))], "key": hex(&b.public)},
+                {"chain": [], "key": null},
+            ],
+        });
+        let answer = ask("device_sets", input);
+        let steps = &answer["output"]["steps"];
+        assert_eq!(steps[0]["results"], json!(["APPLIED"]));
+        assert_eq!(steps[0]["key_state"], "current");
+        assert_eq!(steps[0]["key_sender"], "s");
+        let mut current = vec![hex(&a.public), hex(&b.public)];
+        current.sort();
+        assert_eq!(
+            steps[0]["senders"],
+            json!([{
+                "name": "s",
+                "current": current,
+                "removed": [],
+                "records": [{"id": "r1", "version": 2, "state": "tombstone"}],
+            }])
+        );
+        assert_eq!(steps[1]["results"], json!([]));
+        assert!(steps[1]["key_state"].is_null());
+        assert!(steps[1]["key_sender"].is_null());
+    }
+
+    #[test]
+    fn padded_length_seal_and_open() {
+        let answer = ask("padded_length", json!({"length": 1024}));
+        assert_eq!(answer["output"], json!({"accept": {"padded_length": 1088}}));
+        let private = "8a5e1abca252aefadec7cf0764f52c64b587cdbef900ea3d9046cbf51bc6ed97";
+        let public = "34fa7e71770d8d94c76001ac8d575609f005981f80c115bb7a8fe312687ea40b";
+        let answer = ask("seal", json!({"message": "c301", "encryption_key": public}));
+        let sealed = answer["output"]["accept"]["sealed"].clone();
+        assert_eq!(sealed.as_str().unwrap().len(), 2 * 1073);
+        let answer = ask(
+            "open",
+            json!({"sealed": sealed, "private_keys": [hex(&[1; 32]), private]}),
+        );
+        assert_eq!(answer["output"], json!({"accept": {"message": "c301"}}));
+        let answer = ask("open", json!({"sealed": sealed, "private_keys": []}));
+        assert_eq!(answer["output"], json!({"reject": {"error": "NOT_OPENED"}}));
     }
 
     #[test]
