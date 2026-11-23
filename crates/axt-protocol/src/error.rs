@@ -136,6 +136,8 @@ pub enum Error {
         message: String,
         /// For `VALUE_INVALID`: the field path of the value (`spec/metadata.md`,
         /// section 7.2), or `None` for a path above the limit `protocol.error_field`.
+        /// For `DESCRIPTION_INVALID` of a rule of the description: the path of the member
+        /// that breaks it (`spec/fields.md`, section 6).
         field: Option<String>,
     },
     /// A failure of the app's store, passed through unchanged.

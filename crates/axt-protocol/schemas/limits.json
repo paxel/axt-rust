@@ -1,0 +1,463 @@
+{
+ "format": 1,
+ "specification": "0.2.0",
+ "description": "The limits of AXT: every bound on a size, a count, a length, a depth or a time that the specification sets, by name. The documents of spec/ name the limits that apply; the numbers are here. Sizes are in bytes, lengths of text in bytes of UTF-8 unless the unit says otherwise, and times in seconds. CC0 1.0.",
+ "limits": {
+  "envelope.message": {
+   "value": 16777216,
+   "unit": "bytes",
+   "what": "One message, its single-object header included; also the payload of a MESSAGE frame",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.schema": {
+   "value": 262144,
+   "unit": "bytes",
+   "what": "One schema as JSON text; also a description in its Avro encoding and the text of its derived schema",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.schema_depth": {
+   "value": 64,
+   "unit": "depth",
+   "what": "The nesting depth of a schema's JSON text",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.file_metadata": {
+   "value": 8388608,
+   "unit": "bytes",
+   "what": "The metadata of a file, keys and values together",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.file": {
+   "value": 268435456,
+   "unit": "bytes",
+   "what": "One file as stored",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.file_block": {
+   "value": 67108864,
+   "unit": "bytes",
+   "what": "One data block of a file, after decompression",
+   "section": "envelope.md, section 8"
+  },
+  "envelope.file_data": {
+   "value": 1073741824,
+   "unit": "bytes",
+   "what": "All data blocks of a file together, after decompression",
+   "section": "envelope.md, section 8"
+  },
+  "types.data_depth": {
+   "value": 32,
+   "unit": "depth",
+   "what": "The data depth of a record, the record itself at depth 1",
+   "section": "types.md, section 5.7"
+  },
+  "time.zone": {
+   "value": 64,
+   "unit": "bytes",
+   "what": "The name of a zone in an axt.DateTime",
+   "section": "time.md, section 6.1"
+  },
+  "metadata.label": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The label in the texts of a typed field, an enum symbol or a group, and each value of its label_translations",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.help": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "The help in the texts of a typed field, an enum symbol or a group, and each value of its help_translations",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.placeholder": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The placeholder of a brick of text or of numbers",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.example": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "The example of a brick of text or of numbers",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.translations": {
+   "value": 64,
+   "unit": "entries",
+   "what": "Entries of one label_translations or help_translations",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.emoji": {
+   "value": 10,
+   "unit": "code points",
+   "what": "The emoji in the texts of a typed field, an enum symbol or a group",
+   "section": "metadata.md, section 3"
+  },
+  "metadata.pattern": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "The pattern of an axt.StringField",
+   "section": "metadata.md, section 6.4"
+  },
+  "metadata.pattern_quantifier": {
+   "value": 1000,
+   "unit": "number",
+   "what": "Each number of a range quantifier in a pattern, as in {2,4}",
+   "section": "metadata.md, section 6.4"
+  },
+  "metadata.group_key": {
+   "value": 64,
+   "unit": "bytes",
+   "what": "A group key, in the group of a typed field and in the groups of an axt.ObjectField",
+   "section": "metadata.md, section 5.2"
+  },
+  "manifest.body": {
+   "value": 1048576,
+   "unit": "bytes",
+   "what": "The body of a MANIFEST message, its single-object header included",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.formats": {
+   "value": 16,
+   "unit": "entries",
+   "what": "Entries of formats",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.takes": {
+   "value": 256,
+   "unit": "entries",
+   "what": "Entries of takes",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.sends": {
+   "value": 256,
+   "unit": "entries",
+   "what": "Entries of sends",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.full_name": {
+   "value": 512,
+   "unit": "bytes",
+   "what": "A full name in takes or sends",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.app_name": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "app_name",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.app_url": {
+   "value": 2048,
+   "unit": "bytes",
+   "what": "app_url",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.purpose": {
+   "value": 512,
+   "unit": "bytes",
+   "what": "One purpose sentence, in English or another language",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.purpose_translations": {
+   "value": 64,
+   "unit": "entries",
+   "what": "Entries of one purpose_translations",
+   "section": "manifest.md, section 4"
+  },
+  "manifest.language_tag": {
+   "value": 35,
+   "unit": "characters",
+   "what": "A language tag, in a manifest and in the translations of field metadata and bricks",
+   "section": "manifest.md, section 4"
+  },
+  "protocol.offer_types": {
+   "value": 256,
+   "unit": "entries",
+   "what": "Entries of types in one OFFER, ACCEPT or DECLINE",
+   "section": "protocol.md, section 4.2"
+  },
+  "protocol.ack_records": {
+   "value": 4096,
+   "unit": "entries",
+   "what": "Entries of records in one ACK",
+   "section": "protocol.md, section 7.1"
+  },
+  "protocol.error_detail": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "The detail of an ERROR",
+   "section": "protocol.md, section 8.1"
+  },
+  "protocol.error_record_id": {
+   "value": 64,
+   "unit": "bytes",
+   "what": "The id of the reported message's record, up to which an ERROR carries record",
+   "section": "protocol.md, section 8.1"
+  },
+  "protocol.error_field": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "The field path in an ERROR; a longer path is reported as null",
+   "section": "protocol.md, section 8.1"
+  },
+  "protocol.manifest_wait": {
+   "value": 30,
+   "unit": "seconds",
+   "what": "How long an app waits for the other app's valid MANIFEST after a live connection opens",
+   "section": "protocol.md, section 12"
+  },
+  "protocol.ack_wait": {
+   "value": 5,
+   "unit": "seconds",
+   "what": "Within which a receiver sends the ACK after processing a record message, a CHANGE, a FORWARD or a WITHDRAW",
+   "section": "protocol.md, section 12"
+  },
+  "protocol.answer_wait": {
+   "value": 5,
+   "unit": "seconds",
+   "what": "Within which an app answers an offered type it decides on its own; also the ACCEPT for an offer of a device of the own set",
+   "section": "protocol.md, section 12"
+  },
+  "protocol.idle_wait": {
+   "value": 600,
+   "unit": "seconds",
+   "what": "After which a sender may close a connection in which nothing but unanswered types has happened",
+   "section": "protocol.md, section 12"
+  },
+  "sync.change_type": {
+   "value": 512,
+   "unit": "bytes",
+   "what": "type in a CHANGE",
+   "section": "sync.md, section 8.2"
+  },
+  "sync.change_fields": {
+   "value": 4096,
+   "unit": "entries",
+   "what": "Entries of fields in a CHANGE",
+   "section": "sync.md, section 8.2"
+  },
+  "sync.change_field_name": {
+   "value": 512,
+   "unit": "bytes",
+   "what": "A name in the fields of a CHANGE",
+   "section": "sync.md, section 8.2"
+  },
+  "shares.proposal_fields": {
+   "value": 4096,
+   "unit": "entries",
+   "what": "Entries of fields in one PROPOSAL",
+   "section": "shares.md, section 13.2"
+  },
+  "shares.proposal_field_name": {
+   "value": 512,
+   "unit": "bytes",
+   "what": "A field name in a PROPOSAL",
+   "section": "shares.md, section 13.2"
+  },
+  "shares.proposal_value_bytes": {
+   "value": 65536,
+   "unit": "bytes",
+   "what": "The value bytes of one PROPOSAL, the value of every entry together",
+   "section": "shares.md, section 18.3"
+  },
+  "shares.open_value_bytes": {
+   "value": 1048576,
+   "unit": "bytes",
+   "what": "The value bytes of the open proposals of one proposer in all, at a device",
+   "section": "shares.md, section 18.3"
+  },
+  "shares.open_per_record": {
+   "value": 16,
+   "unit": "entries",
+   "what": "Open proposals of one proposer for one record, at a device",
+   "section": "shares.md, section 18.3"
+  },
+  "shares.open": {
+   "value": 256,
+   "unit": "entries",
+   "what": "Open proposals of one proposer in all, at a device",
+   "section": "shares.md, section 18.3"
+  },
+  "fields.depth": {
+   "value": 64,
+   "unit": "depth",
+   "what": "The depth of typed fields in a description, the root at depth 1",
+   "section": "fields.md, section 9.1"
+  },
+  "fields.long_default": {
+   "value": 9007199254740992,
+   "unit": "number",
+   "what": "The magnitude of a default of axt.LongField, 2^53",
+   "section": "fields.md, section 9.1"
+  },
+  "fields.offer_data_depth": {
+   "value": 256,
+   "unit": "depth",
+   "what": "The data depth up to which a receiver decodes the body of an OFFER",
+   "section": "fields.md, section 10.1"
+  },
+  "fields.relations": {
+   "value": 256,
+   "unit": "entries",
+   "what": "Relations in one list of relations",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_name": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The kind of a relation, and the type of a record target",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_uri": {
+   "value": 2048,
+   "unit": "bytes",
+   "what": "The uri of an outside target",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_text": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The display text of a target",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_note": {
+   "value": 4096,
+   "unit": "bytes",
+   "what": "The note of a relation",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_attributes": {
+   "value": 32,
+   "unit": "entries",
+   "what": "Entries of the attributes of a relation",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_attribute_name": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "A name in the attributes of a relation",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.relation_attribute_value": {
+   "value": 1024,
+   "unit": "bytes",
+   "what": "A value in the attributes of a relation",
+   "section": "fields.md, section 11.4"
+  },
+  "fields.extensions": {
+   "value": 32,
+   "unit": "entries",
+   "what": "Extensions in one list of extensions",
+   "section": "fields.md, section 12.3"
+  },
+  "fields.extension_name": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The name of an extension",
+   "section": "fields.md, section 12.3"
+  },
+  "fields.extension_data": {
+   "value": 65536,
+   "unit": "bytes",
+   "what": "The data of an extension, its single-object header included",
+   "section": "fields.md, section 12.3"
+  },
+  "transports.qr_addresses": {
+   "value": 4,
+   "unit": "entries",
+   "what": "Addresses in the local part of a QR payload",
+   "section": "transports.md, section 3.1"
+  },
+  "transports.qr_payload": {
+   "value": 432,
+   "unit": "bytes",
+   "what": "A QR payload: one with every field present and at its largest, its array in one block",
+   "section": "transports.md, section 3.1"
+  },
+  "transports.qr_text": {
+   "value": 696,
+   "unit": "characters",
+   "what": "The text of a QR code: the text of the largest valid payload",
+   "section": "transports.md, section 3.2"
+  },
+  "transports.open_wait": {
+   "value": 10,
+   "unit": "seconds",
+   "what": "Within which a live connection is open after its TCP connection",
+   "section": "transports.md, section 4.6"
+  },
+  "transports.ping_interval": {
+   "value": 30,
+   "unit": "seconds",
+   "what": "After which an app that has sent no frame sends a PING",
+   "section": "transports.md, section 4.6"
+  },
+  "transports.idle_wait": {
+   "value": 90,
+   "unit": "seconds",
+   "what": "After which an app closes a connection on which it has received no frame",
+   "section": "transports.md, section 4.6"
+  },
+  "transports.relay_url": {
+   "value": 256,
+   "unit": "bytes",
+   "what": "The base URL of a relay, also relay.url in a manifest and a QR payload",
+   "section": "transports.md, section 5.2"
+  },
+  "transports.retry_first": {
+   "value": 1,
+   "unit": "seconds",
+   "what": "The wait before the first repeat of a request after a failure without Retry-After",
+   "section": "transports.md, section 5.3"
+  },
+  "transports.retry_longest": {
+   "value": 3600,
+   "unit": "seconds",
+   "what": "The longest wait between two repeats of a request, which doubles from the first",
+   "section": "transports.md, section 5.3"
+  },
+  "transports.list_messages": {
+   "value": 1000,
+   "unit": "entries",
+   "what": "Messages in the response to one list",
+   "section": "transports.md, section 5.4"
+  },
+  "transports.list_wait": {
+   "value": 60,
+   "unit": "seconds",
+   "what": "The largest wait of a list",
+   "section": "transports.md, section 5.4"
+  },
+  "transports.list_interval": {
+   "value": 60,
+   "unit": "seconds",
+   "what": "The shortest time between two lists of a mailbox without wait",
+   "section": "transports.md, section 5.4"
+  },
+  "transports.holding": {
+   "value": 1209600,
+   "unit": "seconds",
+   "what": "The holding time: how long a relay holds a message after its put, and after which a sender sends a message without an outcome again",
+   "section": "transports.md, section 5.5"
+  },
+  "transports.longest_holding": {
+   "value": 1296000,
+   "unit": "seconds",
+   "what": "The longest a relay holds a message after its put, by which it has deleted it; how long an app keeps what a message from a relay may still need",
+   "section": "transports.md, section 5.5"
+  },
+  "transports.mailbox_idle": {
+   "value": 7776000,
+   "unit": "seconds",
+   "what": "The time without an owner request after which a relay may remove a mailbox, and before which it must not",
+   "section": "transports.md, section 5.5"
+  },
+  "transports.sealed_message": {
+   "value": 17301553,
+   "unit": "bytes",
+   "what": "The largest sealed message, a message of envelope.message sealed and padded, which every relay accepts",
+   "section": "transports.md, section 5.6"
+  }
+ }
+}

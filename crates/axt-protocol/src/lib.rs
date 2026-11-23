@@ -4,10 +4,19 @@
 //! exchange typed records.
 
 mod avro;
+mod bricks;
 pub mod envelope;
 pub mod error;
+mod iregexp;
+mod limits;
+mod links;
+mod manifest;
+mod record_decoder;
+mod records;
 pub mod schema;
 pub mod schemas;
+mod time_values;
+pub mod type_description;
 pub mod value;
 
 #[cfg(feature = "conformance")]
@@ -19,6 +28,7 @@ pub use envelope::{
 };
 pub use error::{Error, ErrorCode};
 pub use schema::{Fingerprint, Schema};
+pub use type_description::TypeDescription;
 pub use value::Value;
 
 /// The version of the AXT specification this library conforms to.

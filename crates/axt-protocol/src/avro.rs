@@ -36,6 +36,7 @@ pub(crate) fn without_logical_types(schema: &Json) -> Json {
 
 /// Parses the JSON text of a schema, without its logical types.
 pub(crate) fn parse(text: &str) -> Result<AvroSchema, String> {
+    configure();
     let json: Json = serde_json::from_str(text).map_err(|e| format!("not JSON: {e}"))?;
     let raw = without_logical_types(&json);
     AvroSchema::parse(raw).map_err(|e| e.to_string())
@@ -154,8 +155,23 @@ pub(crate) fn single_object(fingerprint: [u8; 8], payload: &[u8]) -> Vec<u8> {
     out
 }
 
+/// The deepest `apache-avro` recurses when it decodes a datum, for every schema of the
+/// process. Its own default, 32, counts unions too and is below what a valid description
+/// nests: `fields.depth` typed fields of about five Avro levels each, a field, its union
+/// `kind`, an object, its array of fields and the next field. The limits of AXT, such as
+/// `types.data_depth`, are checked on the decoded value; this one only keeps the
+/// recursion within the stack.
+const DECODE_RECURSION_LIMIT: usize = 512;
+
+/// Sets the recursion limit of `apache-avro`, which takes it once per process, at its first
+/// use; an app that set its own before keeps it. Every schema is parsed by [`parse`] first.
+fn configure() {
+    apache_avro::util::max_decode_recursion_depth(DECODE_RECURSION_LIMIT);
+}
+
 /// Decodes one datum of `schema` that fills `bytes` exactly.
 pub(crate) fn decode(schema: &AvroSchema, bytes: &[u8]) -> Result<Value, String> {
+    configure();
     let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
     let reader = GenericDatumReader::builder(schema)
         .build()
@@ -361,6 +377,271 @@ fn to_avro(value: &Value, schema: &AvroSchema, names: &NamesRef) -> Result<AvroV
     })
 }
 
+/// The datum of `schema` for `json`, a value in the form of `spec/conformance.md`,
+/// section 3.3: bytes as lower-case hexadecimal, a union of `null` and one other type as
+/// the value of its branch, another union as an object of one member named by its
+/// branch. A record member that is absent takes the field's default; members that the
+/// schema does not have are ignored.
+pub(crate) fn from_json(schema: &AvroSchema, json: &Json) -> Result<Value, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    json_value(json, schema, resolved.get_names(), false)
+}
+
+/// The datum of `json` for `schema`; for a `default`, `json` is a default of the Avro
+/// specification, whose bytes are a string of code points and whose union is of its
+/// first branch.
+fn json_value(
+    json: &Json,
+    schema: &AvroSchema,
+    names: &NamesRef,
+    default: bool,
+) -> Result<Value, String> {
+    let schema = resolve(schema, names)?;
+    let not = |what: &str| format!("{json} is not {what}");
+    Ok(match schema {
+        AvroSchema::Null => match json {
+            Json::Null => Value::Null,
+            _ => return Err(not("null")),
+        },
+        AvroSchema::Boolean => Value::Boolean(json.as_bool().ok_or_else(|| not("a boolean"))?),
+        AvroSchema::Int => Value::Int(
+            json.as_i64()
+                .and_then(|i| i32::try_from(i).ok())
+                .ok_or_else(|| not("an int"))?,
+        ),
+        AvroSchema::Long => Value::Long(json.as_i64().ok_or_else(|| not("a long"))?),
+        // A float of JSON is the nearest float to its number.
+        AvroSchema::Float => Value::Float(json.as_f64().ok_or_else(|| not("a float"))? as f32),
+        AvroSchema::Double => Value::Double(json.as_f64().ok_or_else(|| not("a double"))?),
+        AvroSchema::Bytes => Value::Bytes(json_bytes(json, default)?),
+        AvroSchema::Fixed(fixed) => {
+            let bytes = json_bytes(json, default)?;
+            if bytes.len() != fixed.size {
+                return Err(not("of the size of the fixed"));
+            }
+            Value::Fixed(bytes)
+        }
+        AvroSchema::String => Value::String(json.as_str().ok_or_else(|| not("a string"))?.into()),
+        AvroSchema::Enum(e) => {
+            let symbol = json.as_str().ok_or_else(|| not("a symbol"))?;
+            let index = e
+                .symbols
+                .iter()
+                .position(|s| s == symbol)
+                .and_then(|i| u32::try_from(i).ok())
+                .ok_or_else(|| not("a symbol of the enum"))?;
+            Value::Enum {
+                index,
+                symbol: symbol.into(),
+            }
+        }
+        AvroSchema::Array(array) => Value::Array(
+            json.as_array()
+                .ok_or_else(|| not("an array"))?
+                .iter()
+                .map(|item| json_value(item, &array.items, names, default))
+                .collect::<Result<_, String>>()?,
+        ),
+        AvroSchema::Map(map) => Value::Map(
+            json.as_object()
+                .ok_or_else(|| not("an object"))?
+                .iter()
+                .map(|(k, v)| Ok((k.clone(), json_value(v, &map.types, names, default)?)))
+                .collect::<Result<BTreeMap<_, _>, String>>()?,
+        ),
+        AvroSchema::Record(record) => {
+            let members = json.as_object().ok_or_else(|| not("an object"))?;
+            Value::Record(
+                record
+                    .fields
+                    .iter()
+                    .map(|field| {
+                        let value = match (members.get(&field.name), &field.default) {
+                            (Some(member), _) => json_value(member, &field.schema, names, default)?,
+                            (None, Some(d)) => json_value(d, &field.schema, names, true)?,
+                            (None, None) => return Err(format!("no member {}", field.name)),
+                        };
+                        Ok((field.name.clone(), value))
+                    })
+                    .collect::<Result<_, String>>()?,
+            )
+        }
+        AvroSchema::Union(union) => {
+            let variants = union.variants();
+            let (index, branch, inner) = if default {
+                // A default is of the first branch.
+                let branch = variants.first().ok_or("an empty union")?;
+                (0, branch, json)
+            } else if json.is_null() {
+                let index = variants
+                    .iter()
+                    .position(|s| matches!(s, AvroSchema::Null))
+                    .ok_or_else(|| not("a branch of the union"))?;
+                (index, &AvroSchema::Null, json)
+            } else if !names_its_branch(union) {
+                variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| !matches!(s, AvroSchema::Null))
+                    .map(|(i, s)| (i, s, json))
+                    .ok_or_else(|| not("a branch of the union"))?
+            } else {
+                let members = json.as_object().ok_or_else(|| not("a branch"))?;
+                let (name, inner) = match members.iter().next() {
+                    Some(member) if members.len() == 1 => member,
+                    _ => return Err(not("an object of one member, the branch")),
+                };
+                variants
+                    .iter()
+                    .enumerate()
+                    .find(|(_, s)| branch_name(s) == *name)
+                    .map(|(i, s)| (i, s, inner))
+                    .ok_or_else(|| format!("no branch {name}"))?
+            };
+            let value = json_value(inner, branch, names, default)?;
+            let index = u32::try_from(index).map_err(|e| e.to_string())?;
+            if names_its_branch(union) {
+                Value::Union {
+                    index,
+                    branch: branch_name(branch),
+                    value: Box::new(value),
+                }
+            } else {
+                value
+            }
+        }
+        other => return Err(format!("an unexpected schema {other:?}")),
+    })
+}
+
+/// Bytes in JSON: lower-case hexadecimal, or for a default a string of code points.
+fn json_bytes(json: &Json, default: bool) -> Result<Vec<u8>, String> {
+    let text = json
+        .as_str()
+        .ok_or_else(|| format!("{json} is not bytes"))?;
+    if default {
+        return text
+            .chars()
+            .map(|c| u8::try_from(u32::from(c)).map_err(|_| format!("{c} is not a byte")))
+            .collect();
+    }
+    let digits = text.as_bytes();
+    let bad = || format!("{json} is not lower-case hexadecimal");
+    if !digits.len().is_multiple_of(2) {
+        return Err(bad());
+    }
+    let (pairs, _) = digits.as_chunks::<2>();
+    pairs
+        .iter()
+        .map(|&[high, low]| {
+            let digit = |d: u8| match d {
+                b'0'..=b'9' | b'a'..=b'f' => char::from(d).to_digit(16),
+                _ => None,
+            };
+            digit(high)
+                .zip(digit(low))
+                .and_then(|(h, l)| u8::try_from(h.checked_mul(16)?.checked_add(l)?).ok())
+                .ok_or_else(bad)
+        })
+        .collect()
+}
+
+/// A named record type that a walk of a value meets.
+pub(crate) enum Met<'a> {
+    /// A value of the record type of this full name.
+    Record(&'a str),
+    /// An array whose items are of the record type of this full name.
+    Items(&'a str),
+}
+
+/// What a rule of [`first_problem`] says of a spot: `None` to look inside it, or the
+/// answer for it and everything inside it, the path of a problem or `None` for none.
+pub(crate) type Verdict = Option<Option<String>>;
+
+/// The path of the first problem in `value`, a datum of `schema` at `path`, in the order
+/// of the encoding: `rule` judges each record and each array of records the walk meets.
+pub(crate) fn first_problem(
+    schema: &AvroSchema,
+    value: &Value,
+    path: &str,
+    rule: &dyn Fn(Met<'_>, &Value, &str) -> Verdict,
+) -> Result<Option<String>, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    walk(schema, value, path, resolved.get_names(), rule)
+}
+
+fn walk(
+    schema: &AvroSchema,
+    value: &Value,
+    path: &str,
+    names: &NamesRef,
+    rule: &dyn Fn(Met<'_>, &Value, &str) -> Verdict,
+) -> Result<Option<String>, String> {
+    let schema = resolve(schema, names)?;
+    match (schema, value) {
+        (AvroSchema::Record(record), Value::Record(_)) => {
+            if let Some(verdict) = rule(Met::Record(&record.name.fullname(None)), value, path) {
+                return Ok(verdict);
+            }
+            for field in &record.fields {
+                let Some(inner) = value.field(&field.name) else {
+                    continue;
+                };
+                let at = if path.is_empty() {
+                    field.name.clone()
+                } else {
+                    format!("{path}.{}", field.name)
+                };
+                if let Some(found) = walk(&field.schema, inner, &at, names, rule)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        (AvroSchema::Array(array), Value::Array(items)) => {
+            if let AvroSchema::Record(record) = resolve(&array.items, names)?
+                && let Some(verdict) = rule(Met::Items(&record.name.fullname(None)), value, path)
+            {
+                return Ok(verdict);
+            }
+            for (i, item) in items.iter().enumerate() {
+                if let Some(found) = walk(&array.items, item, &format!("{path}[{i}]"), names, rule)?
+                {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        (AvroSchema::Map(map), Value::Map(entries)) => {
+            for (key, item) in entries {
+                let at = format!("{path}[{}]", Json::String(key.clone()));
+                if let Some(found) = walk(&map.types, item, &at, names, rule)? {
+                    return Ok(Some(found));
+                }
+            }
+        }
+        (AvroSchema::Union(union), Value::Union { index, value, .. }) => {
+            if let Some(branch) = usize::try_from(*index)
+                .ok()
+                .and_then(|i| union.variants().get(i))
+            {
+                return walk(branch, value, path, names, rule);
+            }
+        }
+        (AvroSchema::Union(_), Value::Null) => {}
+        (AvroSchema::Union(union), _) => {
+            // The union of null and one other type holds the value of that type.
+            if let Some(branch) = union
+                .variants()
+                .iter()
+                .find(|s| !matches!(s, AvroSchema::Null))
+            {
+                return walk(branch, value, path, names, rule);
+            }
+        }
+        _ => {}
+    }
+    Ok(None)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -472,6 +753,80 @@ mod tests {
         assert_eq!(
             split_single_object(&[0xc3, 0x02, 0, 0, 0, 0, 0, 0, 0, 0]),
             None
+        );
+    }
+
+    #[test]
+    fn the_json_form_takes_defaults_hexadecimal_and_named_branches() {
+        let s = schema(
+            r#"{"type":"record","name":"R","fields":[
+                {"name":"b","type":"bytes"},
+                {"name":"d","type":"bytes","default":"ÿ"},
+                {"name":"o","type":["null","int"],"default":null},
+                {"name":"k","type":[{"type":"record","name":"A","fields":[]},{"type":"record","name":"B","fields":[]}]}
+            ]}"#,
+        );
+        let value = from_json(&s, &serde_json::json!({"b": "00ff", "k": {"B": {}}})).unwrap();
+        assert_eq!(
+            value,
+            Value::Record(vec![
+                ("b".into(), Value::Bytes(vec![0, 255])),
+                ("d".into(), Value::Bytes(vec![255])),
+                ("o".into(), Value::Null),
+                (
+                    "k".into(),
+                    Value::Union {
+                        index: 1,
+                        branch: "B".into(),
+                        value: Box::new(Value::Record(vec![])),
+                    }
+                ),
+            ])
+        );
+        for bad in [
+            serde_json::json!({"b": "FF", "k": {"B": {}}}),
+            serde_json::json!({"b": "0", "k": {"B": {}}}),
+            serde_json::json!({"b": "00", "k": {"C": {}}}),
+            serde_json::json!({"b": "00", "k": {"A": {}, "B": {}}}),
+            serde_json::json!({"k": {"B": {}}}),
+            serde_json::json!({"b": "00", "o": "x", "k": {"B": {}}}),
+        ] {
+            assert!(from_json(&s, &bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_walk_names_the_first_problem_by_its_path() {
+        let s = schema(
+            r#"{"type":"record","name":"R","fields":[
+                {"name":"m","type":{"type":"map","values":{"type":"record","name":"T","fields":[{"name":"x","type":"int"}]}}},
+                {"name":"l","type":["null",{"type":"array","items":"T"}]}
+            ]}"#,
+        );
+        let t = |x| Value::Record(vec![("x".into(), Value::Int(x))]);
+        let value = Value::Record(vec![
+            (
+                "m".into(),
+                Value::Map(BTreeMap::from([("a\"".into(), t(1))])),
+            ),
+            ("l".into(), Value::Array(vec![t(1), t(2)])),
+        ]);
+        let rule = |met: Met<'_>, value: &Value, path: &str| match met {
+            Met::Record("T") if value.field("x") == Some(&Value::Int(2)) => Some(Some(path.into())),
+            _ => None,
+        };
+        assert_eq!(
+            first_problem(&s, &value, "", &rule).unwrap(),
+            Some("l[1]".into())
+        );
+        let items = |met: Met<'_>, _: &Value, path: &str| match met {
+            Met::Items("T") => Some(Some(path.into())),
+            Met::Record("T") => Some(Some(path.into())),
+            _ => None,
+        };
+        assert_eq!(
+            first_problem(&s, &value, "", &items).unwrap(),
+            Some(r#"m["a\""]"#.into())
         );
     }
 

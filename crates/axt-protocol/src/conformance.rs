@@ -6,14 +6,17 @@
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
 
+use crate::bricks::{self, Kind as Brick};
 use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
+use crate::record_decoder;
 use crate::schema::Schema;
+use crate::type_description::TypeDescription;
 use crate::value::Value;
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks"];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -104,6 +107,10 @@ fn operation(op: &str) -> Option<Operation> {
         "decode_message" => decode_message,
         "decode_body" => decode_body,
         "encode_message" => encode_message,
+        "decode_record" => decode_record,
+        "derive" => derive,
+        "describe" => describe,
+        "check_record" => check_record,
         _ => return None,
     })
 }
@@ -182,6 +189,76 @@ fn encode_message(input: &Map<String, Json>) -> Result<Json, Failure> {
     Ok(accept(json!({"message": hex(&message)})))
 }
 
+/// `decode_record` (sections 5.2 and 5.16): a record read with its writer schema.
+fn decode_record(input: &Map<String, Json>) -> Result<Json, Failure> {
+    match input.get("reader_schema") {
+        None | Some(Json::Null) => {}
+        Some(_) => {
+            return Err(Failure::BadRequest(
+                "a reader_schema other than null is not read yet".into(),
+            ));
+        }
+    }
+    let writer = Schema::parse(string(input, "writer_schema")?)?;
+    let value = record_decoder::decode_record(&writer, &bytes(input.get("body"))?, true)?;
+    Ok(accept(json!({"value": value_json(&value)})))
+}
+
+/// The valid description that the member `description` of the input encodes.
+fn description(input: &Map<String, Json>) -> Result<TypeDescription, Failure> {
+    let datum = bricks::decode_description(&bytes(input.get("description"))?)?;
+    Ok(TypeDescription::from_datum(datum)?)
+}
+
+/// `derive` (section 5.16): the schema derived from a description.
+fn derive(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let description = description(input)?;
+    let schema = description.schema();
+    Ok(accept(json!({
+        "schema": description.schema_text(),
+        "canonical_form": schema.canonical_form(),
+        "fingerprint": hex(&schema.fingerprint().0),
+    })))
+}
+
+/// `describe` (section 5.16): what a receiver shows of a type or of one of its fields.
+fn describe(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let description = description(input)?;
+    let languages = input
+        .get("languages")
+        .and_then(Json::as_array)
+        .and_then(|l| {
+            l.iter()
+                .map(|tag| tag.as_str().map(str::to_owned))
+                .collect::<Option<Vec<_>>>()
+        })
+        .ok_or_else(|| Failure::BadRequest("languages is not a list of strings".into()))?;
+    let root = description.root();
+    match input.get("field") {
+        None | Some(Json::Null) => match &root.kind {
+            Brick::Object(object) => Ok(accept(bricks::describe_object(
+                &root.texts,
+                object,
+                &languages,
+            ))),
+            _ => Err(Failure::BadRequest("the root is not an object".into())),
+        },
+        Some(Json::String(path)) => {
+            let field = bricks::field_at(root, path)
+                .ok_or_else(|| Failure::BadRequest(format!("no field {path}")))?;
+            Ok(accept(bricks::describe_field(field, &languages)))
+        }
+        Some(_) => Err(Failure::BadRequest("field is not a string".into())),
+    }
+}
+
+/// `check_record` (section 5.16): whether a record keeps the checks of its description.
+fn check_record(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let description = description(input)?;
+    bricks::check_record(&description, &bytes(input.get("body"))?)?;
+    Ok(accept(json!({})))
+}
+
 /// The member `name` of the input as a string.
 fn string<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a str, Failure> {
     input
@@ -253,46 +330,12 @@ fn unhex(text: &str) -> Result<Vec<u8>, Failure> {
 
 /// Bytes as lower-case hexadecimal digits.
 fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    bytes.iter().fold(String::new(), |mut out, b| {
-        // Writing to a String cannot fail.
-        let _ = write!(out, "{b:02x}");
-        out
-    })
+    crate::value::hex(bytes)
 }
 
 /// A decoded value in the JSON form of `spec/conformance.md`, section 3.3.
 fn value_json(value: &Value) -> Json {
-    match value {
-        Value::Null => Json::Null,
-        Value::Boolean(b) => json!(b),
-        Value::Int(i) => json!(i),
-        Value::Long(l) => json!(l),
-        // The shortest decimal that reads back to the float, not to its widening.
-        Value::Float(f) => f
-            .to_string()
-            .parse::<f64>()
-            .ok()
-            .map_or(Json::Null, |d| json!(d)),
-        Value::Double(d) => json!(d),
-        Value::Bytes(b) | Value::Fixed(b) => json!(hex(b)),
-        Value::String(s) => json!(s),
-        Value::Enum { symbol, .. } => json!(symbol),
-        Value::Array(items) => Json::Array(items.iter().map(value_json).collect()),
-        Value::Map(entries) => Json::Object(
-            entries
-                .iter()
-                .map(|(k, v)| (k.clone(), value_json(v)))
-                .collect(),
-        ),
-        Value::Record(fields) => Json::Object(
-            fields
-                .iter()
-                .map(|(k, v)| (k.clone(), value_json(v)))
-                .collect(),
-        ),
-        Value::Union { branch, value, .. } => json!({ branch.as_str(): value_json(value) }),
-    }
+    value.to_json()
 }
 
 #[cfg(test)]
@@ -304,9 +347,12 @@ mod tests {
     }
 
     #[test]
-    fn hello_names_the_encoding_category() {
+    fn hello_names_the_implemented_categories() {
         let answer = ask("hello", json!({"format": 1}));
-        assert_eq!(answer["output"]["categories"], json!(["encoding"]));
+        assert_eq!(
+            answer["output"]["categories"],
+            json!(["encoding", "bricks"])
+        );
     }
 
     #[test]
@@ -353,22 +399,5 @@ mod tests {
         let mut wrong = form;
         wrong["sha256"] = json!(hex(&[0; 32]));
         assert!(bytes(Some(&wrong)).is_err());
-    }
-
-    #[test]
-    fn a_union_of_several_branches_is_written_under_the_branch_name() {
-        let value = Value::Union {
-            index: 1,
-            branch: "axt.StringField".into(),
-            value: Box::new(Value::Record(vec![(
-                "multiline".into(),
-                Value::Boolean(false),
-            )])),
-        };
-        assert_eq!(
-            value_json(&value),
-            json!({"axt.StringField": {"multiline": false}})
-        );
-        assert_eq!(value_json(&Value::Float(0.1)), json!(0.1));
     }
 }

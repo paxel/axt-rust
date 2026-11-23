@@ -1,0 +1,47 @@
+{
+  "type": "record",
+  "name": "Extension",
+  "namespace": "axt",
+  "doc": "An extension: one record of an app's own type that the app adds to a record of another type, such as the fields of its own that a cat-a-log adds to a Pet, held as the bytes of its single-object encoding. Defined in spec/fields.md, section 12.",
+  "axt.label": "Extension",
+  "axt.label_translations": {
+    "de": "Erweiterung"
+  },
+  "axt.help": "Further fields that an app adds to this entry.",
+  "axt.help_translations": {
+    "de": "Weitere Felder, die eine App diesem Eintrag hinzufügt."
+  },
+  "axt.emoji": "🧩",
+  "fields": [
+    {
+      "name": "name",
+      "type": "string",
+      "doc": "The full name of the extension's record type, such as org.example.catalog.CatExtension, which holds its major version, of at most 256 bytes; at most one extension of a name in a list.",
+      "axt.label": "Extension type",
+      "axt.label_translations": {
+        "de": "Erweiterungstyp"
+      },
+      "axt.help": "The type of this extension.",
+      "axt.help_translations": {
+        "de": "Der Typ dieser Erweiterung."
+      },
+      "axt.emoji": "🔖",
+      "axt.advanced": true
+    },
+    {
+      "name": "data",
+      "type": "bytes",
+      "doc": "The extension's record in single-object encoding: the marker C3 01, the fingerprint of its writer schema as 8 bytes in little-endian order, and the record's Avro binary encoding. Passed on unchanged by an app that does not know the type.",
+      "axt.label": "Extension data",
+      "axt.label_translations": {
+        "de": "Erweiterungsdaten"
+      },
+      "axt.help": "The values of this extension.",
+      "axt.help_translations": {
+        "de": "Die Werte dieser Erweiterung."
+      },
+      "axt.emoji": "📦",
+      "axt.advanced": true
+    }
+  ]
+}

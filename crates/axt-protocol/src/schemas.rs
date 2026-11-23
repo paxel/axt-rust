@@ -7,10 +7,12 @@ use std::sync::LazyLock;
 use crate::schema::Schema;
 
 /// The JSON text of each schema, by full name.
-const TEXTS: [(&str, &str); 16] = [
+const TEXTS: [(&str, &str); 23] = [
     ("axt.Accept", include_str!("../schemas/Accept.avsc")),
     ("axt.Ack", include_str!("../schemas/Ack.avsc")),
     ("axt.Change", include_str!("../schemas/Change.avsc")),
+    ("axt.Date", include_str!("../schemas/Date.avsc")),
+    ("axt.DateTime", include_str!("../schemas/DateTime.avsc")),
     ("axt.Decline", include_str!("../schemas/Decline.avsc")),
     ("axt.DeviceAdd", include_str!("../schemas/DeviceAdd.avsc")),
     ("axt.DeviceJoin", include_str!("../schemas/DeviceJoin.avsc")),
@@ -19,7 +21,10 @@ const TEXTS: [(&str, &str); 16] = [
         include_str!("../schemas/DeviceRemove.avsc"),
     ),
     ("axt.Envelope", include_str!("../schemas/Envelope.avsc")),
+    ("axt.Duration", include_str!("../schemas/Duration.avsc")),
     ("axt.Error", include_str!("../schemas/Error.avsc")),
+    ("axt.Extension", include_str!("../schemas/Extension.avsc")),
+    ("axt.Field", include_str!("../schemas/Field.avsc")),
     ("axt.Forward", include_str!("../schemas/Forward.avsc")),
     ("axt.Manifest", include_str!("../schemas/Manifest.avsc")),
     ("axt.Offer", include_str!("../schemas/Offer.avsc")),
@@ -28,7 +33,9 @@ const TEXTS: [(&str, &str); 16] = [
         "axt.ProposalReply",
         include_str!("../schemas/ProposalReply.avsc"),
     ),
+    ("axt.Relation", include_str!("../schemas/Relation.avsc")),
     ("axt.Resync", include_str!("../schemas/Resync.avsc")),
+    ("axt.Time", include_str!("../schemas/Time.avsc")),
     ("axt.Withdraw", include_str!("../schemas/Withdraw.avsc")),
 ];
 
