@@ -1204,7 +1204,7 @@ pub(crate) fn check_record(
     description: &crate::type_description::TypeDescription,
     body: &[u8],
 ) -> Result<Value, Error> {
-    let value = crate::record_decoder::decode_record(description.schema(), body, false)?;
+    let value = crate::record_decoder::decode_record(description.schema(), None, body, false)?;
     match check_value(description.root(), &value, "", false) {
         Some(path) => Err(crate::record_decoder::value_invalid(
             &path,

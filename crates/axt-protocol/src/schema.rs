@@ -124,6 +124,35 @@ impl Schema {
         avro::first_problem(&self.avro, value, path, rule)
     }
 
+    /// The full name and the Parsing Canonical Form of every named type this schema
+    /// defines, each written on its own, with what it refers to written out in full.
+    pub(crate) fn named_forms(&self) -> Result<Vec<(String, String)>, String> {
+        avro::named_forms(&self.avro)
+    }
+
+    /// The full name and the aliases, in full, of a record schema; `None` for another
+    /// schema.
+    pub(crate) fn record_names(&self) -> Option<(String, Vec<String>)> {
+        avro::record_names(&self.avro)
+    }
+
+    /// The plan that reads data of this schema, as the writer, as `reader` (Avro 1.12
+    /// schema resolution); the text says why the two do not resolve.
+    pub(crate) fn resolution(&self, reader: &Schema) -> Result<avro::Resolution, String> {
+        avro::resolution(&self.avro, &reader.avro)
+    }
+
+    /// Decodes one datum of this schema, without a single-object header, that fills
+    /// `bytes` exactly, as the reader schema of `resolution`; the text says why it does
+    /// not.
+    pub(crate) fn decode_datum_as(
+        &self,
+        resolution: &avro::Resolution,
+        bytes: &[u8],
+    ) -> Result<Value, String> {
+        avro::decode_resolved(&self.avro, resolution, bytes)
+    }
+
     /// The single-object encoding of `value` as a datum of this schema.
     pub(crate) fn encode_single_object(&self, value: &Value) -> Result<Vec<u8>, String> {
         let payload = avro::encode(&self.avro, value)?;

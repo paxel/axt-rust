@@ -14,6 +14,10 @@ use serde_json::Value as Json;
 
 use crate::value::Value;
 
+mod resolve;
+
+pub(crate) use resolve::Resolution;
+
 /// The two bytes that begin a single-object encoding.
 const SINGLE_OBJECT_MARKER: [u8; 2] = [0xc3, 0x01];
 
@@ -49,8 +53,88 @@ pub(crate) fn parse(text: &str) -> Result<AvroSchema, String> {
 /// custom attribute named `size`, `precision` or `scale` that is not a number.
 pub(crate) fn canonical_form(schema: &AvroSchema) -> Result<String, String> {
     let mut out = String::new();
-    write_canonical(schema, &mut HashSet::new(), &mut out)?;
+    write_canonical(schema, None, &mut HashSet::new(), &mut out)?;
     Ok(out)
+}
+
+/// The full name and the Parsing Canonical Form of every named type that `schema`
+/// defines, each written on its own: a name it refers to that it did not define itself,
+/// such as one defined earlier in `schema`, is written out in full.
+pub(crate) fn named_forms(schema: &AvroSchema) -> Result<Vec<(String, String)>, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    collect_named(schema, resolved.get_names(), &mut out)?;
+    Ok(out)
+}
+
+/// Adds the named types that `schema` defines to `out`, see [`named_forms`].
+fn collect_named(
+    schema: &AvroSchema,
+    names: &NamesRef,
+    out: &mut Vec<(String, String)>,
+) -> Result<(), String> {
+    let full_name = match schema {
+        AvroSchema::Record(r) => Some(r.name.fullname(None)),
+        AvroSchema::Enum(e) => Some(e.name.fullname(None)),
+        AvroSchema::Fixed(f) => Some(f.name.fullname(None)),
+        _ => None,
+    };
+    if let Some(full_name) = full_name {
+        let mut form = String::new();
+        write_canonical(schema, Some(names), &mut HashSet::new(), &mut form)?;
+        out.push((full_name, form));
+    }
+    match schema {
+        AvroSchema::Record(r) => r
+            .fields
+            .iter()
+            .try_for_each(|f| collect_named(&f.schema, names, out)),
+        AvroSchema::Array(a) => collect_named(&a.items, names, out),
+        AvroSchema::Map(m) => collect_named(&m.types, names, out),
+        AvroSchema::Union(u) => u
+            .variants()
+            .iter()
+            .try_for_each(|b| collect_named(b, names, out)),
+        _ => Ok(()),
+    }
+}
+
+/// The full name and the aliases, in full, of a record schema; `None` for another schema.
+pub(crate) fn record_names(schema: &AvroSchema) -> Option<(String, Vec<String>)> {
+    match schema {
+        AvroSchema::Record(r) => Some((
+            r.name.fullname(None),
+            r.aliases
+                .iter()
+                .flatten()
+                .map(|a| a.fullname(None))
+                .collect(),
+        )),
+        _ => None,
+    }
+}
+
+/// The plan that reads data of `writer` as `reader` (Avro 1.12 schema resolution), or
+/// why the two do not resolve.
+pub(crate) fn resolution(writer: &AvroSchema, reader: &AvroSchema) -> Result<Resolution, String> {
+    let writer_names = ResolvedSchema::try_from(writer).map_err(|e| e.to_string())?;
+    let reader_names = ResolvedSchema::try_from(reader).map_err(|e| e.to_string())?;
+    Resolution::new(
+        writer,
+        writer_names.get_names(),
+        reader,
+        reader_names.get_names(),
+    )
+}
+
+/// Decodes one datum of `writer` that fills `bytes` exactly and reads it as the reader
+/// schema of `resolution`.
+pub(crate) fn decode_resolved(
+    writer: &AvroSchema,
+    resolution: &Resolution,
+    bytes: &[u8],
+) -> Result<Value, String> {
+    resolution.apply(read_datum(writer, bytes)?)
 }
 
 /// A string as JSON.
@@ -59,8 +143,11 @@ fn quoted(text: &str) -> String {
 }
 
 /// Writes the canonical form of `schema`; a named type already written is its full name.
+///
+/// With `names`, a reference to a type not yet written is written out in full.
 fn write_canonical(
     schema: &AvroSchema,
+    names: Option<&NamesRef>,
     defined: &mut HashSet<String>,
     out: &mut String,
 ) -> Result<(), String> {
@@ -83,7 +170,7 @@ fn write_canonical(
                         out.push(',');
                     }
                     out.push_str(&format!("{{\"name\":{},\"type\":", quoted(&field.name)));
-                    write_canonical(&field.schema, defined, out)?;
+                    write_canonical(&field.schema, names, defined, out)?;
                     out.push('}');
                 }
                 out.push_str("]}");
@@ -100,15 +187,20 @@ fn write_canonical(
                 out.push_str(&format!(",\"size\":{}}}", f.size));
             }
         }
-        AvroSchema::Ref { name } => out.push_str(&quoted(&name.fullname(None))),
+        AvroSchema::Ref { name } => match names.and_then(|n| n.get(name)) {
+            Some(&target) if !defined.contains(&name.fullname(None)) => {
+                write_canonical(target, names, defined, out)?;
+            }
+            _ => out.push_str(&quoted(&name.fullname(None))),
+        },
         AvroSchema::Array(array) => {
             out.push_str("{\"type\":\"array\",\"items\":");
-            write_canonical(&array.items, defined, out)?;
+            write_canonical(&array.items, names, defined, out)?;
             out.push('}');
         }
         AvroSchema::Map(map) => {
             out.push_str("{\"type\":\"map\",\"values\":");
-            write_canonical(&map.types, defined, out)?;
+            write_canonical(&map.types, names, defined, out)?;
             out.push('}');
         }
         AvroSchema::Union(union) => {
@@ -117,7 +209,7 @@ fn write_canonical(
                 if i > 0 {
                     out.push(',');
                 }
-                write_canonical(branch, defined, out)?;
+                write_canonical(branch, names, defined, out)?;
             }
             out.push(']');
         }
@@ -171,8 +263,13 @@ fn configure() {
 
 /// Decodes one datum of `schema` that fills `bytes` exactly.
 pub(crate) fn decode(schema: &AvroSchema, bytes: &[u8]) -> Result<Value, String> {
-    configure();
     let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    from_avro(read_datum(schema, bytes)?, schema, resolved.get_names())
+}
+
+/// The value of `apache-avro` of one datum of `schema` that fills `bytes` exactly.
+fn read_datum(schema: &AvroSchema, bytes: &[u8]) -> Result<AvroValue, String> {
+    configure();
     let reader = GenericDatumReader::builder(schema)
         .build()
         .map_err(|e| e.to_string())?;
@@ -181,7 +278,7 @@ pub(crate) fn decode(schema: &AvroSchema, bytes: &[u8]) -> Result<Value, String>
     if !input.is_empty() {
         return Err(format!("{} bytes are left over", input.len()));
     }
-    from_avro(value, schema, resolved.get_names())
+    Ok(value)
 }
 
 /// Encodes `value` as one datum of `schema`.

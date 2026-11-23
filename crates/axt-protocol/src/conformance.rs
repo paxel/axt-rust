@@ -16,7 +16,7 @@ use crate::value::Value;
 
 /// The categories of `spec/conformance.md`, section 2.1, that the adapter answers. A category
 /// is listed only once all of its vectors pass.
-pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks"];
+pub const IMPLEMENTED_CATEGORIES: &[&str] = &["encoding", "bricks", "types"];
 
 /// The version of the vector file format the adapter reads.
 pub const VECTOR_FORMAT: i64 = 1;
@@ -189,18 +189,21 @@ fn encode_message(input: &Map<String, Json>) -> Result<Json, Failure> {
     Ok(accept(json!({"message": hex(&message)})))
 }
 
-/// `decode_record` (sections 5.2 and 5.16): a record read with its writer schema.
+/// `decode_record` (sections 5.2 and 5.16): a record read with its writer schema, as the
+/// reader schema when one is given.
 fn decode_record(input: &Map<String, Json>) -> Result<Json, Failure> {
-    match input.get("reader_schema") {
-        None | Some(Json::Null) => {}
+    let writer = Schema::parse(string(input, "writer_schema")?)?;
+    let reader = match input.get("reader_schema") {
+        None | Some(Json::Null) => None,
+        Some(Json::String(text)) => Some(Schema::parse(text)?),
         Some(_) => {
             return Err(Failure::BadRequest(
-                "a reader_schema other than null is not read yet".into(),
+                "reader_schema is neither a string nor null".into(),
             ));
         }
-    }
-    let writer = Schema::parse(string(input, "writer_schema")?)?;
-    let value = record_decoder::decode_record(&writer, &bytes(input.get("body"))?, true)?;
+    };
+    let value =
+        record_decoder::decode_record(&writer, reader.as_ref(), &bytes(input.get("body"))?, true)?;
     Ok(accept(json!({"value": value_json(&value)})))
 }
 
@@ -351,7 +354,7 @@ mod tests {
         let answer = ask("hello", json!({"format": 1}));
         assert_eq!(
             answer["output"]["categories"],
-            json!(["encoding", "bricks"])
+            json!(["encoding", "bricks", "types"])
         );
     }
 
