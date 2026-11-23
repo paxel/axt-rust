@@ -75,6 +75,36 @@ pub(crate) fn decode_record(
     Ok(value)
 }
 
+/// Checks `value`, a decoded datum of `schema`, as [`decode_record`] does: its data depth,
+/// counted from `depth_offset`, and its time values, relations and extensions, named from
+/// `path`.
+///
+/// # Errors
+///
+/// `UNDECODABLE` for a value deeper than `types.data_depth`, and `VALUE_INVALID` for a
+/// time value, a relation or an extension that is not valid.
+#[cfg(feature = "conformance")]
+pub(crate) fn check_value(
+    schema: &Schema,
+    value: &Value,
+    path: &str,
+    depth_offset: usize,
+) -> Result<(), Error> {
+    if depth(value).saturating_add(depth_offset) > TYPES_DATA_DEPTH {
+        return Err(Error::axt(
+            ErrorCode::Undecodable,
+            format!("the value nests deeper than {TYPES_DATA_DEPTH}"),
+        ));
+    }
+    let found = schema
+        .first_problem(value, path, &rule)
+        .map_err(|e| Error::axt(ErrorCode::Undecodable, e))?;
+    match found {
+        Some(path) => Err(value_invalid(&path, "breaks a rule")),
+        None => Ok(()),
+    }
+}
+
 /// The Parsing Canonical Form of each named type that a type may define in the namespace
 /// `axt`: the time types, `axt.Relation` with its nested types and `axt.Extension`, by
 /// full name.

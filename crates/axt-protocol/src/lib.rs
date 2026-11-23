@@ -8,6 +8,8 @@ mod bricks;
 mod container;
 mod device_sets;
 mod ed25519;
+#[cfg(feature = "conformance")]
+mod element_parts;
 pub mod envelope;
 pub mod error;
 mod file_reader;
@@ -19,12 +21,16 @@ mod links;
 mod live_session;
 mod manifest;
 mod node;
+#[cfg(feature = "conformance")]
+mod proposals;
 mod record_decoder;
 mod records;
 mod relation_index;
 pub mod schema;
 pub mod schemas;
 mod sealing;
+#[cfg(feature = "conformance")]
+mod shares;
 mod signing;
 mod time_values;
 pub mod type_description;

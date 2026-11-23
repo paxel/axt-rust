@@ -176,6 +176,45 @@ impl Schema {
         avro::decode_resolved(&self.avro, resolution, bytes)
     }
 
+    /// The schema of a type parsed by [`avro::parse`], with its canonical form.
+    #[cfg(feature = "conformance")]
+    fn of_avro(avro: apache_avro::Schema) -> Result<Self, String> {
+        let canonical_form = avro::canonical_form(&avro)?;
+        let fingerprint = Fingerprint::of(canonical_form.as_bytes());
+        Ok(Self {
+            avro,
+            canonical_form,
+            fingerprint,
+        })
+    }
+
+    /// The schema of the field `name` of this record schema, standing on its own; `None`
+    /// for another schema or a record without that field.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn field_schema(&self, name: &str) -> Option<Self> {
+        // A parsed schema's names always resolve.
+        avro::field_schema(&self.avro, name)
+            .ok()
+            .flatten()
+            .and_then(|s| Self::of_avro(s).ok())
+    }
+
+    /// The schema of the items of this array schema, standing on its own; `None` for
+    /// another schema.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn items_schema(&self) -> Option<Self> {
+        avro::items_schema(&self.avro)
+            .ok()
+            .flatten()
+            .and_then(|s| Self::of_avro(s).ok())
+    }
+
+    /// The full name of this record schema; `None` for another schema.
+    #[cfg(feature = "conformance")]
+    pub(crate) fn record_name(&self) -> Option<String> {
+        self.record_names().map(|(name, _)| name)
+    }
+
     /// The single-object encoding of `value` as a datum of this schema.
     pub(crate) fn encode_single_object(&self, value: &Value) -> Result<Vec<u8>, String> {
         let payload = avro::encode(&self.avro, value)?;

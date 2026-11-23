@@ -66,6 +66,24 @@ pub(crate) const PROTOCOL_ACK_RECORDS: usize = 4096;
 /// up to which an `ERROR` carries `record`.
 #[cfg(feature = "conformance")]
 pub(crate) const PROTOCOL_ERROR_RECORD_ID: usize = 64;
+/// `shares.proposal_fields`: the most entries of `fields` in one `PROPOSAL`.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_PROPOSAL_FIELDS: usize = 4096;
+/// `shares.proposal_field_name`: the most bytes of a field name in a `PROPOSAL`.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_PROPOSAL_FIELD_NAME: usize = 512;
+/// `shares.proposal_value_bytes`: the most value bytes of one `PROPOSAL`.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_PROPOSAL_VALUE_BYTES: usize = 65_536;
+/// `shares.open_value_bytes`: the most value bytes of the open proposals of one proposer.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_OPEN_VALUE_BYTES: usize = 1_048_576;
+/// `shares.open_per_record`: the most open proposals of one proposer for one record.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_OPEN_PER_RECORD: usize = 16;
+/// `shares.open`: the most open proposals of one proposer in all.
+#[cfg(feature = "conformance")]
+pub(crate) const SHARES_OPEN: usize = 256;
 /// `fields.depth`: the deepest typed fields nest.
 pub(crate) const FIELDS_DEPTH: usize = 64;
 /// `fields.long_default`: the largest magnitude of a default of an `axt.LongField`.
@@ -173,5 +191,15 @@ mod tests {
             limit("protocol.error_record_id"),
             PROTOCOL_ERROR_RECORD_ID as u64
         );
+        for (name, value) in [
+            ("shares.proposal_fields", SHARES_PROPOSAL_FIELDS),
+            ("shares.proposal_field_name", SHARES_PROPOSAL_FIELD_NAME),
+            ("shares.proposal_value_bytes", SHARES_PROPOSAL_VALUE_BYTES),
+            ("shares.open_value_bytes", SHARES_OPEN_VALUE_BYTES),
+            ("shares.open_per_record", SHARES_OPEN_PER_RECORD),
+            ("shares.open", SHARES_OPEN),
+        ] {
+            assert_eq!(limit(name), value as u64, "{name}");
+        }
     }
 }

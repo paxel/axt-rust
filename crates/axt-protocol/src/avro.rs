@@ -114,6 +114,80 @@ pub(crate) fn record_names(schema: &AvroSchema) -> Option<(String, Vec<String>)>
     }
 }
 
+/// The schema of the field `name` of `schema`, a record schema, standing on its own: a
+/// named type it refers to that is defined elsewhere in `schema` is written out in full
+/// where it first appears. `None` for another schema or a record without that field.
+#[cfg(feature = "conformance")]
+pub(crate) fn field_schema(schema: &AvroSchema, name: &str) -> Result<Option<AvroSchema>, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    let names = resolved.get_names();
+    let AvroSchema::Record(record) = resolve(schema, names)? else {
+        return Ok(None);
+    };
+    let Some(field) = record.fields.iter().find(|f| f.name == name) else {
+        return Ok(None);
+    };
+    let mut out = field.schema.clone();
+    inline_names(&mut out, names, &mut HashSet::new())?;
+    Ok(Some(out))
+}
+
+/// The schema of the items of `schema`, an array schema, standing on its own (see
+/// [`field_schema`]); `None` for another schema.
+#[cfg(feature = "conformance")]
+pub(crate) fn items_schema(schema: &AvroSchema) -> Result<Option<AvroSchema>, String> {
+    let resolved = ResolvedSchema::try_from(schema).map_err(|e| e.to_string())?;
+    let names = resolved.get_names();
+    let AvroSchema::Array(array) = resolve(schema, names)? else {
+        return Ok(None);
+    };
+    let mut out = array.items.as_ref().clone();
+    inline_names(&mut out, names, &mut HashSet::new())?;
+    Ok(Some(out))
+}
+
+/// Writes out in `schema` the first reference to each named type that `schema` does not
+/// define before it, with the type of `names`.
+#[cfg(feature = "conformance")]
+fn inline_names(
+    schema: &mut AvroSchema,
+    names: &NamesRef,
+    defined: &mut HashSet<String>,
+) -> Result<(), String> {
+    match schema {
+        AvroSchema::Record(record) => {
+            defined.insert(record.name.fullname(None));
+            for field in &mut record.fields {
+                inline_names(&mut field.schema, names, defined)?;
+            }
+        }
+        AvroSchema::Enum(e) => {
+            defined.insert(e.name.fullname(None));
+        }
+        AvroSchema::Fixed(f) => {
+            defined.insert(f.name.fullname(None));
+        }
+        AvroSchema::Ref { name } => {
+            if !defined.contains(&name.fullname(None)) {
+                let mut target = resolve(schema, names)?.clone();
+                inline_names(&mut target, names, defined)?;
+                *schema = target;
+            }
+        }
+        AvroSchema::Array(array) => inline_names(&mut array.items, names, defined)?,
+        AvroSchema::Map(map) => inline_names(&mut map.types, names, defined)?,
+        AvroSchema::Union(union) => {
+            let mut branches = union.variants().to_vec();
+            for branch in &mut branches {
+                inline_names(branch, names, defined)?;
+            }
+            *union = UnionSchema::new(branches).map_err(|e| e.to_string())?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
 /// The plan that reads data of `writer` as `reader` (Avro 1.12 schema resolution), or
 /// why the two do not resolve.
 pub(crate) fn resolution(writer: &AvroSchema, reader: &AvroSchema) -> Result<Resolution, String> {

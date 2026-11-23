@@ -3,7 +3,7 @@
 //! Behind the feature `conformance`, which only the crate `axt-conformance-adapter` turns on.
 //! It is a test tool, not part of the public API.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value as Json, json};
 use sha2::{Digest, Sha256};
@@ -18,16 +18,22 @@ use crate::envelope::{self, Envelope, Kind, RecordRef};
 use crate::error::{Error, ErrorCode};
 use crate::file_reader;
 use crate::keys::{EncryptionSeed, SigningSeed};
+use crate::links;
 use crate::live_session::LiveApp;
 use crate::manifest;
+use crate::proposals::{
+    HeldOwnerRecord, OpenProposal, OwnRecord, OwnerManifest, OwnerState, ProposalAnswer,
+    ProposalOwner, ProposalProposer, ProposalReceiver, Stop,
+};
 use crate::record_decoder;
 use crate::records::{
     self, Applied, DeleteWithLocalChanges, ElementKey, ElementMerge, HeldRecord, HeldState,
-    LocalChanges, RecordKind, RecordMessage, RecordPolicy,
+    LocalChanges, Outcome, RecordKind, RecordMessage, RecordPolicy,
 };
 use crate::relation_index::{HeldRelation, RelationResolver};
 use crate::schema::Schema;
 use crate::sealing;
+use crate::shares::{self, Acked, Owes, Sent};
 use crate::signing;
 use crate::type_description::TypeDescription;
 use crate::value::Value;
@@ -37,6 +43,7 @@ use crate::zone_rules::{self, Anchor, DateTime, Duration, TzdbZoneRules, WallClo
 /// is listed only once all of its vectors pass.
 pub const IMPLEMENTED_CATEGORIES: &[&str] = &[
     "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file", "protocol",
+    "shares",
 ];
 
 /// The version of the vector file format the adapter reads.
@@ -157,6 +164,16 @@ fn operation(op: &str) -> Option<Operation> {
         "contact_key" => contact_key,
         "resend_after_removal" => resend_after_removal,
         "session" => session,
+        "receive" => apply,
+        "take_version" => take_version,
+        "owed" => owed,
+        "acked" => acked,
+        "pass_withdrawal" => pass_withdrawal,
+        "join_receivers" => join_receivers,
+        "offer_types" => offer_types,
+        "shared_value" => shared_value,
+        "owner" => owner,
+        "proposer" => proposer,
         _ => return None,
     })
 }
@@ -1268,6 +1285,607 @@ fn session(input: &Map<String, Json>) -> Result<Json, Failure> {
     Ok(json!({"steps": answers}))
 }
 
+/// A version of the input in decimal text, or `None` for `null` or no member.
+fn version_text(input: &Map<String, Json>, name: &str) -> Result<Option<i64>, Failure> {
+    match input.get(name) {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::String(text)) => text
+            .parse()
+            .map(Some)
+            .map_err(|_| Failure::BadRequest(format!("{name} is no decimal text"))),
+        Some(_) => Err(Failure::BadRequest(format!("{name} is no decimal text"))),
+    }
+}
+
+/// A version of the input in decimal text that must be there.
+fn required_version(input: &Map<String, Json>, name: &str) -> Result<i64, Failure> {
+    version_text(input, name)?.ok_or_else(|| Failure::BadRequest(format!("{name} is missing")))
+}
+
+/// A version as decimal text, or `null`.
+fn text_of(version: Option<i64>) -> Json {
+    version.map_or(Json::Null, |v| json!(v.to_string()))
+}
+
+/// The member `name` of the input as a flag: true only for `true`.
+fn flag(input: &Map<String, Json>, name: &str) -> bool {
+    input.get(name) == Some(&Json::Bool(true))
+}
+
+/// A record kind of the input.
+fn record_kind(value: Option<&Json>) -> Result<RecordKind, Failure> {
+    match value.and_then(Json::as_str) {
+        Some("DATA") => Ok(RecordKind::Data),
+        Some("DELETE") => Ok(RecordKind::Delete),
+        Some("WITHDRAW") => Ok(RecordKind::Withdraw),
+        other => Err(Failure::BadRequest(format!("no record kind {other:?}"))),
+    }
+}
+
+/// An outcome of the input, or `None` for `null`.
+fn outcome(value: Option<&Json>) -> Result<Option<Outcome>, Failure> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        Some(value) => [
+            Outcome::Applied,
+            Outcome::Merged,
+            Outcome::Kept,
+            Outcome::Duplicate,
+            Outcome::Stale,
+            Outcome::Withdrawn,
+        ]
+        .into_iter()
+        .find(|o| value.as_str() == Some(o.as_str()))
+        .map(Some)
+        .ok_or_else(|| Failure::BadRequest(format!("no outcome {value}"))),
+    }
+}
+
+/// `take_version` (section 5.15): the next version of an installation that counts.
+fn take_version(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let (version, state_stamp) = shares::take_version(
+        input.get("occasion").and_then(Json::as_str) == Some("share_again"),
+        required_version(input, "highest_given")?,
+        required_version(input, "state_stamp")?,
+    )
+    .ok_or_else(|| Failure::BadRequest("the versions are spent".into()))?;
+    Ok(accept(json!({
+        "version": text_of(Some(version)),
+        "state_stamp": text_of(Some(state_stamp)),
+    })))
+}
+
+/// `owed` (section 5.15): what a device owes a receiver of one record.
+fn owed(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let last = match input.get("last") {
+        Some(Json::Object(last)) => Some(Sent {
+            kind: record_kind(last.get("kind"))?,
+            version: required_version(last, "version")?,
+        }),
+        _ => None,
+    };
+    let (owes, version) = shares::owed(
+        flag(input, "shared"),
+        flag(input, "deleted"),
+        required_version(input, "version")?,
+        version_text(input, "withdrawal")?,
+        last,
+    );
+    Ok(accept(
+        json!({"owes": owes.code(), "version": text_of(version)}),
+    ))
+}
+
+/// `acked` (section 5.15): the outcome a device holds after one entry of an `ACK`.
+fn acked(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let (taken, then, to_pass) = shares::acked(Acked {
+        sent: record_kind(input.get("sent"))?,
+        held: outcome(input.get("held"))?,
+        outcome: outcome(input.get("outcome"))?
+            .ok_or_else(|| Failure::BadRequest("outcome is missing".into()))?,
+        receiver_version: required_version(input, "receiver_version")?,
+        shared: flag(input, "shared"),
+        withdrawal: version_text(input, "withdrawal")?,
+        state_stamp: required_version(input, "state_stamp")?,
+        sibling_stamp: version_text(input, "sibling_stamp")?,
+        sibling: flag(input, "sibling"),
+    });
+    Ok(accept(json!({
+        "outcome": taken.as_str(),
+        "then": then.code(),
+        "to_pass": text_of(to_pass),
+    })))
+}
+
+/// `pass_withdrawal` (section 5.15): what a device does with the version to pass.
+fn pass_withdrawal(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let then = shares::pass_withdrawal(
+        flag(input, "shared"),
+        version_text(input, "withdrawal")?,
+        required_version(input, "to_pass")?,
+        required_version(input, "state_stamp")?,
+    );
+    Ok(accept(json!({"then": then.code(), "to_pass": null})))
+}
+
+/// The objects of the list `name` of the input.
+fn objects<'a>(
+    input: &'a Map<String, Json>,
+    name: &str,
+) -> Result<Vec<&'a Map<String, Json>>, Failure> {
+    match input.get(name) {
+        None | Some(Json::Null) => Ok(Vec::new()),
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|i| {
+                i.as_object()
+                    .ok_or_else(|| Failure::BadRequest(format!("{name} holds no object")))
+            })
+            .collect(),
+        Some(_) => Err(Failure::BadRequest(format!("{name} is no list"))),
+    }
+}
+
+/// `join_receivers` (section 5.15): the record toward receivers that join.
+fn join_receivers(input: &Map<String, Json>) -> Result<Json, Failure> {
+    if !input.get("receivers").is_some_and(Json::is_array) {
+        return Err(Failure::BadRequest("receivers is no list".into()));
+    }
+    let receivers = objects(input, "receivers")?
+        .into_iter()
+        .map(|r| Ok((flag(r, "shared"), version_text(r, "withdrawal")?)))
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let (shared, withdrawal, new_state_stamp) = shares::join_receivers(&receivers);
+    Ok(accept(json!({
+        "shared": shared,
+        "withdrawal": text_of(withdrawal),
+        "new_state_stamp": new_state_stamp,
+    })))
+}
+
+/// `offer_types` (section 5.15): the types a device offers a receiver of another user.
+fn offer_types(input: &Map<String, Json>) -> Result<Json, Failure> {
+    if !input.get("records").is_some_and(Json::is_array) {
+        return Err(Failure::BadRequest("records is no list".into()));
+    }
+    let records = objects(input, "records")?
+        .into_iter()
+        .map(|r| {
+            Ok((
+                string(r, "type")?.to_owned(),
+                r.get("owes")
+                    .and_then(Json::as_str)
+                    .and_then(Owes::from_code)
+                    .unwrap_or(Owes::Nothing),
+                flag(r, "delivered"),
+            ))
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let types: Vec<Json> = shares::offer_types(&records)
+        .into_iter()
+        .map(|(t, count)| json!({"type": t, "count": count}))
+        .collect();
+    Ok(accept(json!({"types": types})))
+}
+
+/// The strings of the list `name` of the input; none where it is absent.
+fn strings(input: &Map<String, Json>, name: &str) -> Result<Vec<String>, Failure> {
+    match input.get(name) {
+        None | Some(Json::Null) => Ok(Vec::new()),
+        Some(Json::Array(items)) => items
+            .iter()
+            .map(|i| {
+                i.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| Failure::BadRequest(format!("{name} is not a list of strings")))
+            })
+            .collect(),
+        Some(_) => Err(Failure::BadRequest(format!(
+            "{name} is not a list of strings"
+        ))),
+    }
+}
+
+/// A record value of the vectors read by its shape, as [`shaped_value`] reads it, with
+/// the `sender` of each relation's target, a key in hexadecimal text, as its bytes.
+fn vector_value(json: &Json) -> Result<Value, Failure> {
+    let mut value = shaped_value(json)?;
+    senders_as_bytes(&mut value);
+    Ok(value)
+}
+
+/// `value` with the hexadecimal `sender` of each relation's target as its bytes.
+fn senders_as_bytes(value: &mut Value) {
+    match value {
+        Value::Record(fields) => {
+            let is_relation = fields.iter().any(|(n, _)| n == "id")
+                && fields
+                    .iter()
+                    .any(|(n, v)| n == "target" && matches!(v, Value::Record(_)));
+            for (name, inner) in fields.iter_mut() {
+                if is_relation
+                    && name == "target"
+                    && let Value::Record(target) = inner
+                {
+                    for (member, sender) in target.iter_mut() {
+                        if member == "sender"
+                            && let Value::String(text) = sender
+                            && let Ok(bytes) = unhex(text)
+                            && bytes.len() == 32
+                        {
+                            *sender = Value::Fixed(bytes);
+                        }
+                    }
+                }
+                senders_as_bytes(inner);
+            }
+        }
+        Value::Array(items) => items.iter_mut().for_each(senders_as_bytes),
+        Value::Map(entries) => entries.values_mut().for_each(senders_as_bytes),
+        _ => {}
+    }
+}
+
+/// `shared_value` (section 5.15): the record as the sender sends it to one receiver
+/// (`spec/shares.md`, section 19.1); relations and extensions are found by their shape,
+/// as the input has no schema.
+fn shared_value(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let given = input
+        .get("value")
+        .filter(|v| v.is_object())
+        .ok_or_else(|| Failure::BadRequest("value is not an object".into()))?;
+    if flag(input, "own_user") || flag(input, "links") {
+        return Ok(accept(json!({"value": given})));
+    }
+    let shared: HashSet<String> = strings(input, "shared")?.into_iter().collect();
+    let own_keys = strings(input, "own_keys")?
+        .iter()
+        .map(|k| key(&json!(k)))
+        .collect::<Result<BTreeSet<Key>, Failure>>()?;
+    fn walk(value: &Value, shared: &HashSet<String>, own_keys: &BTreeSet<Key>) -> Value {
+        match value {
+            Value::Array(list)
+                if !list.is_empty()
+                    && list
+                        .iter()
+                        .all(|e| element_key_of(e) == Some(ElementKey::Id)) =>
+            {
+                Value::Array(links::shared_relations(list, shared, own_keys))
+            }
+            Value::Array(list)
+                if !list.is_empty()
+                    && list
+                        .iter()
+                        .all(|e| element_key_of(e) == Some(ElementKey::Name)) =>
+            {
+                Value::Array(Vec::new())
+            }
+            Value::Record(fields) => Value::Record(
+                fields
+                    .iter()
+                    .map(|(n, v)| (n.clone(), walk(v, shared, own_keys)))
+                    .collect(),
+            ),
+            Value::Array(list) => {
+                Value::Array(list.iter().map(|v| walk(v, shared, own_keys)).collect())
+            }
+            other => other.clone(),
+        }
+    }
+    let value = walk(&vector_value(given)?, &shared, &own_keys);
+    Ok(accept(json!({"value": value_json(&value)})))
+}
+
+/// The replies of a step in hexadecimal text.
+fn replies_json(replies: &[Vec<u8>]) -> Vec<String> {
+    replies.iter().map(|r| hex(r)).collect()
+}
+
+/// The steps of the input.
+fn steps_of(input: &Map<String, Json>) -> Result<Vec<&Map<String, Json>>, Failure> {
+    if !input.get("steps").is_some_and(Json::is_array) {
+        return Err(Failure::BadRequest("steps is no list".into()));
+    }
+    objects(input, "steps")
+}
+
+/// An integer of the input that is a JSON number, or 0 where it is absent.
+fn count(input: &Map<String, Json>, name: &str) -> Result<i64, Failure> {
+    match input.get(name) {
+        None | Some(Json::Null) => Ok(0),
+        Some(_) => integer(input, name),
+    }
+}
+
+/// `owner` (section 5.15): one installation of the owner of shared records
+/// (`spec/shares.md`, sections 12 to 18).
+fn owner(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let device = object(input, "device")?;
+    let receivers = objects(device, "receivers")?
+        .into_iter()
+        .map(|r| {
+            Ok(ProposalReceiver {
+                name: string(r, "name")?.to_owned(),
+                current: keys(r.get("current"))?,
+                removed: keys(r.get("removed"))?,
+                own_user: flag(r, "own_user"),
+                links: flag(r, "links"),
+            })
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let records = objects(device, "records")?
+        .into_iter()
+        .map(|r| {
+            Ok(OwnRecord {
+                id: string(r, "id")?.to_owned(),
+                type_name: string(r, "type")?.to_owned(),
+                version: required_version(r, "version")?,
+                deleted: r.get("state").and_then(Json::as_str) == Some("deleted"),
+                value: match r.get("value") {
+                    None | Some(Json::Null) => Value::Record(Vec::new()),
+                    Some(value) => vector_value(value)?,
+                },
+                shared: strings(r, "shared")?.into_iter().collect(),
+            })
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let open = objects(device, "open")?
+        .into_iter()
+        .map(|o| {
+            Ok(OpenProposal {
+                receiver: string(o, "receiver")?.to_owned(),
+                proposal_id: string(o, "proposal_id")?.to_owned(),
+                id: string(o, "id")?.to_owned(),
+                version: 0,
+                value_bytes: usize::try_from(count(o, "value_bytes")?)
+                    .map_err(|_| Failure::BadRequest("value_bytes is negative".into()))?,
+                message: None,
+                signer: None,
+                fields: Vec::new(),
+            })
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let answer_of = |a: &Map<String, Json>| -> Result<ProposalAnswer, Failure> {
+        Ok(ProposalAnswer {
+            receiver: string(a, "receiver")?.to_owned(),
+            proposal_id: string(a, "proposal_id")?.to_owned(),
+            answer: string(a, "answer")?.to_owned(),
+            id: string(a, "id")?.to_owned(),
+            version: integer(a, "version")?,
+        })
+    };
+    let stop_of = |s: &Map<String, Json>| -> Result<Stop, Failure> {
+        Ok(Stop {
+            receiver: string(s, "receiver")?.to_owned(),
+            id: s.get("id").and_then(Json::as_str).map(str::to_owned),
+            type_name: s.get("type").and_then(Json::as_str).map(str::to_owned),
+        })
+    };
+    let mut owner = ProposalOwner::start(
+        SigningSeed::new(sized(device, "seed")?),
+        OwnerState {
+            siblings: match device.get("siblings") {
+                None | Some(Json::Null) => BTreeSet::new(),
+                Some(siblings) => keys(Some(siblings))?,
+            },
+            proposals: strings(device, "proposals")?.into_iter().collect(),
+            schemas: strings(device, "schemas")?,
+            receivers,
+            records,
+            readers: match device.get("readers") {
+                None | Some(Json::Null) => None,
+                Some(readers) => Some(schema_texts(Some(readers))?),
+            },
+            open,
+            answers: objects(device, "answers")?
+                .into_iter()
+                .map(answer_of)
+                .collect::<Result<_, _>>()?,
+            stops: objects(device, "stopped")?
+                .into_iter()
+                .map(stop_of)
+                .collect::<Result<_, _>>()?,
+        },
+    )?;
+    let mut out = Vec::new();
+    for step in steps_of(input)? {
+        out.push(if let Some(message) = step.get("receive") {
+            let received = owner.receive(&bytes(Some(message))?)?;
+            json!({"result": received.result, "replies": replies_json(&received.replies)})
+        } else if step.contains_key("answer") {
+            let a = object(step, "answer")?;
+            let answered = owner.answer(
+                string(a, "receiver")?,
+                string(a, "proposal_id")?,
+                string(a, "answer")?,
+            )?;
+            json!({
+                "made": answered.made,
+                "replies": replies_json(&answered.replies),
+                "update": answered.update.map(|(version, value)| json!({
+                    "version": version.to_string(),
+                    "value": value_json(&value),
+                })),
+            })
+        } else if step.contains_key("answered") {
+            owner.answered(answer_of(object(step, "answered")?)?);
+            json!({})
+        } else if step.contains_key("stop") {
+            owner.stop(stop_of(object(step, "stop")?)?);
+            json!({})
+        } else if step.contains_key("change") {
+            let c = object(step, "change")?;
+            owner.change(
+                string(c, "id")?,
+                string(c, "action")?,
+                c.get("receiver").and_then(Json::as_str),
+            );
+            json!({})
+        } else if step.contains_key("manifest") {
+            owner.proposals = strings(step, "manifest")?.into_iter().collect();
+            json!({})
+        } else if step.contains_key("query") {
+            let mut open: Vec<_> = owner.open.iter().collect();
+            open.sort_by(|a, b| (&a.receiver, &a.proposal_id).cmp(&(&b.receiver, &b.proposal_id)));
+            let mut answers: Vec<_> = owner.answers.iter().collect();
+            answers
+                .sort_by(|a, b| (&a.receiver, &a.proposal_id).cmp(&(&b.receiver, &b.proposal_id)));
+            let mut records: Vec<_> = owner.records.iter().collect();
+            records.sort_by(|a, b| a.id.cmp(&b.id));
+            json!({
+                "open": open.iter().map(|p| json!({
+                    "receiver": p.receiver,
+                    "proposal_id": p.proposal_id,
+                    "id": p.id,
+                    "message_hash": p.message.as_ref().map(|m| hex(&Sha256::digest(m))),
+                })).collect::<Vec<_>>(),
+                "answers": answers.iter().map(|a| json!({
+                    "receiver": a.receiver,
+                    "proposal_id": a.proposal_id,
+                    "answer": a.answer,
+                    "id": a.id,
+                    "version": a.version,
+                })).collect::<Vec<_>>(),
+                "records": records.iter().map(|r| json!({
+                    "id": r.id,
+                    "version": r.version.to_string(),
+                    "state": if r.deleted { "deleted" } else { "there" },
+                    "value": value_json(&r.value),
+                })).collect::<Vec<_>>(),
+            })
+        } else {
+            return Err(Failure::BadRequest("a step of no known form".into()));
+        });
+    }
+    Ok(json!({"steps": out}))
+}
+
+/// The bytes of each field by name, or `None` for `null` or no member.
+fn value_bytes(value: Option<&Json>) -> Result<Option<BTreeMap<String, Vec<u8>>>, Failure> {
+    match value {
+        None | Some(Json::Null) => Ok(None),
+        Some(Json::Object(values)) => values
+            .iter()
+            .map(|(name, v)| Ok((name.clone(), bytes(Some(v))?)))
+            .collect::<Result<_, Failure>>()
+            .map(Some),
+        Some(_) => Err(Failure::BadRequest("values is no object".into())),
+    }
+}
+
+/// `proposer` (section 5.15): one installation of a receiver that proposes changes
+/// (`spec/shares.md`, sections 13 to 16).
+fn proposer(input: &Map<String, Json>) -> Result<Json, Failure> {
+    let device = object(input, "device")?;
+    let mut manifests = HashMap::new();
+    if let Some(given) = device.get("manifests").and_then(Json::as_object) {
+        for (k, m) in given {
+            let m = m
+                .as_object()
+                .ok_or_else(|| Failure::BadRequest("a manifest is no object".into()))?;
+            manifests.insert(
+                key(&json!(k))?,
+                OwnerManifest {
+                    revision: integer(m, "revision")?,
+                    proposals: strings(m, "proposals")?.into_iter().collect(),
+                },
+            );
+        }
+    }
+    let records = objects(device, "records")?
+        .into_iter()
+        .map(|r| {
+            Ok(HeldOwnerRecord {
+                id: string(r, "id")?.to_owned(),
+                type_name: string(r, "type")?.to_owned(),
+                version: required_version(r, "version")?,
+                last: string(r, "last")?.to_owned(),
+                schema: string(r, "schema")?.to_owned(),
+                values: value_bytes(r.get("values"))?.unwrap_or_default(),
+                deleted: flag(r, "deleted"),
+            })
+        })
+        .collect::<Result<Vec<_>, Failure>>()?;
+    let owner_keys = strings(device, "owner")?
+        .iter()
+        .map(|k| key(&json!(k)))
+        .collect::<Result<Vec<Key>, Failure>>()?;
+    let mut proposer = ProposalProposer::start(
+        SigningSeed::new(sized(device, "seed")?),
+        owner_keys,
+        manifests,
+        records,
+        strings(device, "proposal_ids")?,
+        &strings(device, "schemas")?,
+    )?;
+    let messages = |messages: &[Vec<u8>]| json!({"messages": replies_json(messages)});
+    let mut out = Vec::new();
+    for step in steps_of(input)? {
+        out.push(if step.contains_key("propose") {
+            let p = object(step, "propose")?;
+            let values = p
+                .get("values")
+                .and_then(Json::as_object)
+                .ok_or_else(|| Failure::BadRequest("values is no object".into()))?
+                .iter()
+                .map(|(name, v)| {
+                    Ok((
+                        name.clone(),
+                        match v {
+                            Json::Null => None,
+                            v => Some(bytes(Some(v))?),
+                        },
+                    ))
+                })
+                .collect::<Result<Vec<_>, Failure>>()?;
+            let message = proposer.propose(
+                string(p, "id")?,
+                &key(p.get("to").unwrap_or(&Json::Null))?,
+                &values,
+                flag(p, "relay"),
+            )?;
+            json!({"message": message.map(|m| hex(&m))})
+        } else if let Some(message) = step.get("receive") {
+            let received = proposer.receive(&bytes(Some(message))?)?;
+            json!({"result": received.result, "replies": replies_json(&received.replies)})
+        } else if step.contains_key("record") {
+            let r = object(step, "record")?;
+            proposer.record_message(
+                string(r, "id")?,
+                string(r, "kind")?,
+                required_version(r, "version")?,
+                value_bytes(r.get("values"))?,
+            );
+            json!({})
+        } else if step.contains_key("manifest") {
+            let m = object(step, "manifest")?;
+            proposer.manifest(
+                key(m.get("key").unwrap_or(&Json::Null))?,
+                OwnerManifest {
+                    revision: integer(m, "revision")?,
+                    proposals: strings(m, "proposals")?.into_iter().collect(),
+                },
+            );
+            json!({})
+        } else if let Some(removed) = step.get("remove") {
+            messages(&proposer.remove(&key(removed)?)?)
+        } else if let Some(connected) = step.get("connect") {
+            messages(&proposer.connect(&key(connected)?))
+        } else if step.contains_key("days") {
+            messages(&proposer.days(integer(step, "days")?))
+        } else if step.contains_key("query") {
+            let query = proposer.query(string(step, "query")?);
+            json!({
+                "status": query.as_ref().map(|(status, _)| status.clone()),
+                "resend": query.is_some_and(|(_, resend)| resend),
+            })
+        } else {
+            return Err(Failure::BadRequest("a step of no known form".into()));
+        });
+    }
+    Ok(json!({"steps": out}))
+}
+
 /// The member `name` of the input as an object.
 fn object<'a>(input: &'a Map<String, Json>, name: &str) -> Result<&'a Map<String, Json>, Failure> {
     input
@@ -1378,9 +1996,151 @@ mod tests {
             answer["output"]["categories"],
             json!([
                 "encoding", "bricks", "types", "time", "keys", "manifest", "records", "file",
-                "protocol"
+                "protocol", "shares"
             ])
         );
+    }
+
+    #[test]
+    fn the_adapter_answers_the_sender_operations() {
+        let output = |op: &str, input: Json| ask(op, input)["output"].clone();
+        assert_eq!(
+            output(
+                "take_version",
+                json!({"occasion": "withdraw", "highest_given": "3", "state_stamp": "3"})
+            ),
+            json!({"accept": {"version": "4", "state_stamp": "3"}})
+        );
+        assert_eq!(
+            output(
+                "owed",
+                json!({"shared": false, "deleted": false, "version": "7", "withdrawal": "6",
+                    "last": {"kind": "WITHDRAW", "version": "6"}})
+            ),
+            json!({"accept": {"owes": "WITHDRAW", "version": "6"}})
+        );
+        assert_eq!(
+            output(
+                "acked",
+                json!({"held": null, "receiver_version": "7", "shared": false,
+                    "withdrawal": "6", "state_stamp": "5", "sibling_stamp": null,
+                    "sibling": true, "sent": "WITHDRAW", "outcome": "STALE"})
+            ),
+            json!({"accept": {"outcome": "STALE", "then": "wait", "to_pass": "7"}})
+        );
+        assert_eq!(
+            output(
+                "pass_withdrawal",
+                json!({"shared": true, "withdrawal": "6", "to_pass": "8", "state_stamp": "7"})
+            ),
+            json!({"accept": {"then": "send_state", "to_pass": null}})
+        );
+        assert_eq!(
+            output(
+                "join_receivers",
+                json!({"receivers": [{"shared": true, "withdrawal": null}]})
+            ),
+            json!({"accept": {"shared": true, "withdrawal": null, "new_state_stamp": false}})
+        );
+        assert_eq!(
+            output(
+                "offer_types",
+                json!({"records": [{"type": "a", "owes": "DATA", "delivered": false}]})
+            ),
+            json!({"accept": {"types": [{"type": "a", "count": 1}]}})
+        );
+        let id = "3f2c8a5e-9b1d-4c7e-8a6f-2d4b5c6e7f80";
+        let policy = json!({
+            "local_changes": "per_field",
+            "delete_with_local_changes": "delete",
+            "withdraw_with_local_changes": "keep",
+        });
+        let receive = output(
+            "receive",
+            json!({"policy": policy, "events": [
+                {"message": {"kind": "DATA", "id": id, "version": 1, "type": "a.M",
+                    "value": {"t": "a"}}},
+                {"local_change": {"id": id, "field": "t", "value": "b"}},
+                {"message": {"kind": "WITHDRAW", "id": id, "version": 2}},
+                {"local_take": {"id": id}},
+            ]}),
+        );
+        assert_eq!(receive["steps"][3]["outcome"], "WITHDRAWN");
+        for (op, bad) in [
+            (
+                "owed",
+                json!({"shared": true, "deleted": false, "version": 7, "withdrawal": null,
+                    "last": null}),
+            ),
+            (
+                "owed",
+                json!({"shared": true, "deleted": false, "version": "7", "withdrawal": null,
+                    "last": {"kind": "X", "version": "1"}}),
+            ),
+            ("join_receivers", json!({"receivers": 1})),
+            ("offer_types", json!({"records": 1})),
+            (
+                "receive",
+                json!({"policy": {"local_changes": "per_field",
+                    "delete_with_local_changes": "delete"},
+                    "events": [{"local_take": {"id": id}}]}),
+            ),
+        ] {
+            assert!(ask(op, bad.clone())["failure"].is_string(), "{op} {bad}");
+        }
+    }
+
+    #[test]
+    fn the_adapter_sorts_open_proposals_of_one_receiver_by_id() {
+        let id = "3f2c8a5e-9b1d-4c7e-8a6f-2d4b5c6e7f80";
+        let reply = ask(
+            "owner",
+            json!({
+                "device": {
+                    "seed": "01".repeat(32),
+                    "open": [
+                        {"receiver": "p", "proposal_id": "b", "id": id},
+                        {"receiver": "p", "proposal_id": "a", "id": id},
+                    ],
+                },
+                "steps": [{"query": true}],
+            }),
+        );
+        let open = reply["output"]["steps"][0]["open"].as_array().unwrap();
+        let ids: Vec<&Json> = open.iter().map(|p| &p["proposal_id"]).collect();
+        assert_eq!(ids, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn a_shared_value_keeps_the_relations_to_shared_records_of_the_own_set() {
+        let shared = "0b6f4a3e-8c1d-4f27-9e5a-2d7c41b8e093";
+        let own = "1b84a600f3503e22bbcc99e63202a7194bf6bd69aff1471cce6410d53c26ec4a";
+        let relation = |id: &str, target: &str, sender: Json| {
+            json!({"id": id, "kind": "axt.related",
+                "target": {"id": target, "sender": sender, "type": "a.T", "text": ""},
+                "note": "", "start": null, "end": null, "attributes": {}})
+        };
+        let kept = relation("f1b3d5a7-2c4e-4f60-8a1b-3c5d7e9f0a2b", shared, json!(own));
+        let value = json!({
+            "title": "Vet",
+            "relations": [
+                kept,
+                relation("6c8e0a2b-4d6f-4a81-9c3e-5f7a9b1d3e60", shared, json!("ab".repeat(32))),
+                relation("a2c4e6f8-0b1d-4e3f-8a5c-7e9f1b3d5a70", "5d2e9c71-3a4b-4e8f-b6d0-7f1a2c9e4b58", Json::Null),
+            ],
+            "extensions": [{"name": "a.E", "data": "c301"}],
+        });
+        let input = |links: bool| {
+            json!({"type": "a.T", "value": value, "links": links, "own_user": false,
+                "shared": [shared], "own_keys": [own]})
+        };
+        let reply = ask("shared_value", input(false));
+        assert_eq!(
+            reply["output"]["accept"]["value"],
+            json!({"title": "Vet", "relations": [kept], "extensions": []})
+        );
+        let reply = ask("shared_value", input(true));
+        assert_eq!(reply["output"]["accept"]["value"], value);
     }
 
     #[test]
