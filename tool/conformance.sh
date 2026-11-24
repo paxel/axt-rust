@@ -25,7 +25,7 @@ cd "$work"
 curl --proto =https --proto-redir =https -fsSL -o "$ARCHIVE" "$BASE/$ARCHIVE"
 curl --proto =https --proto-redir =https -fsSL -o "$BUNDLE" "$BASE/$BUNDLE"
 echo "$AXT_SHA256  $ARCHIVE" | sha256sum --check --strict
-if [ "${AXT_SKIP_ATTESTATION:-}" = "1" ]; then
+if [[ "${AXT_SKIP_ATTESTATION:-}" = "1" ]]; then
   echo "The attestation was not checked (AXT_SKIP_ATTESTATION=1); the SHA-256 was."
 else
   # The release attests through the reusable provenance workflow of paxel/gates, so that
@@ -37,7 +37,7 @@ fi
 
 mkdir suite
 tar -xzf "$ARCHIVE" -C suite --strip-components=1
-if [ -z "${AXT_PYTHON:-}" ]; then
+if [[ -z "${AXT_PYTHON:-}" ]]; then
   (cd suite && uv sync --frozen --no-dev --no-build)
 fi
 
@@ -58,7 +58,7 @@ adapter="$root/target/release/axt-conformance-adapter"
 hello=$(echo '{"id": "hello", "op": "hello", "input": {"format": 1}}' | "$adapter")
 if python3 -c 'import json, sys; sys.exit(0 if json.loads(sys.argv[1])["output"]["categories"] else 1)' "$hello"; then
   cd suite
-  if [ -n "${AXT_PYTHON:-}" ]; then
+  if [[ -n "${AXT_PYTHON:-}" ]]; then
     "$AXT_PYTHON" -I conformance/run.py "$@" -- "$adapter"
   else
     uv run --frozen --no-dev python3 conformance/run.py "$@" -- "$adapter"
