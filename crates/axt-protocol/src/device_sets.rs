@@ -122,6 +122,7 @@ pub(crate) enum ChangeResult {
 
 impl ChangeResult {
     /// The result as the conformance vectors write it.
+    #[cfg(any(test, feature = "conformance"))]
     pub(crate) const fn code(self) -> &'static str {
         match self {
             Self::Applied => "APPLIED",
@@ -192,6 +193,7 @@ pub(crate) enum KeyState {
 
 impl KeyState {
     /// The state as the conformance vectors write it.
+    #[cfg(feature = "conformance")]
     pub(crate) const fn name(self) -> &'static str {
         match self {
             Self::Current => "current",
@@ -471,6 +473,7 @@ impl DeviceSetReceiver {
 
 /// What a member does with a `DEVICE_JOIN` (section 5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) enum JoinAction {
     /// Ask its user whether to add the device.
     Ask,
@@ -481,6 +484,7 @@ pub(crate) enum JoinAction {
 }
 
 /// The set of a member, as a `DEVICE_JOIN` is answered by it.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) struct Member<'a> {
     /// The member's own key.
     pub(crate) key: &'a Key,
@@ -499,6 +503,7 @@ pub(crate) struct Member<'a> {
 /// [`ErrorCode::SignatureInvalid`] for a message whose signature does not verify, and
 /// [`ErrorCode::DeviceRejected`] for a proof that does not verify or a removed key of the
 /// set.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn answer_device_join(
     message: &[u8],
     member: &Member<'_>,
@@ -542,6 +547,7 @@ pub(crate) fn answer_device_join(
 
 /// Whether a new device with the key `device` takes `chain`, the answer to its
 /// `DEVICE_JOIN` to `member` (section 5.2, step 5).
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn takes_join_chain(chain: &[Vec<u8>], member: &Key, device: &Key) -> bool {
     let mut added = false;
     for message in chain {

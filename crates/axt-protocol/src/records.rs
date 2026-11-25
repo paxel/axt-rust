@@ -530,6 +530,7 @@ fn first_message(message: RecordMessage<'_>) -> Applied {
 /// The receiver's user takes after all the `DELETE` or the `WITHDRAW` of the receiver's
 /// version that it kept the record against (`spec/protocol.md`, section 7.3); `None`
 /// when the record is kept against neither.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn take_kept_removal(held: &HeldRecord) -> Option<Applied> {
     let withdraw = match held.kept_against? {
         RecordKind::Withdraw => true,
