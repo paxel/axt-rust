@@ -15,7 +15,7 @@
 The Rust library of [AXT](https://github.com/paxel/axt) (Avro eXchange Transfer), the open
 standard that lets small, independent apps exchange typed records with each other.
 
-Status: in development; nothing is published yet.
+Status: published on crates.io; conforms to AXT 0.2.0.
 
 ## Conformance
 

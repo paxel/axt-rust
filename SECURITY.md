@@ -2,8 +2,7 @@
 
 ## Supported versions
 
-`axt-protocol` is in development; no version has been released yet. Once versions are released,
-only the latest one gets security fixes.
+Only the latest released version gets security fixes.
 
 ## Reporting a vulnerability
 
