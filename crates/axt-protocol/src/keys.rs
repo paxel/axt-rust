@@ -32,7 +32,13 @@ impl From<[u8; 32]> for SigningSeed {
 
 /// The 32-byte private key of an X25519 encryption key (RFC 7748), with which the
 /// installation opens the messages sealed for it through a relay.
-pub struct EncryptionSeed(Zeroizing<[u8; 32]>);
+pub struct EncryptionSeed(
+    #[cfg_attr(
+        not(any(test, feature = "conformance")),
+        expect(dead_code, reason = "opens the sealed messages of a later version")
+    )]
+    Zeroizing<[u8; 32]>,
+);
 
 impl EncryptionSeed {
     /// The encryption key of the private key `seed`.
@@ -42,6 +48,7 @@ impl EncryptionSeed {
     }
 
     /// The private key's bytes.
+    #[cfg(any(test, feature = "conformance"))]
     pub(crate) fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

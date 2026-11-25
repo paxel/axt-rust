@@ -16,7 +16,9 @@ use crate::limits::{
     METADATA_LABEL, METADATA_PLACEHOLDER, METADATA_TRANSLATIONS,
 };
 use crate::links::{extensions_problem, is_avro_name, relations_problem};
-use crate::manifest::{is_language_tag, lookup};
+use crate::manifest::is_language_tag;
+#[cfg(any(test, feature = "conformance"))]
+use crate::manifest::lookup;
 use crate::schemas::{axt_schema, axt_schema_text};
 use crate::time_values::is_valid_time_value;
 use crate::value::Value;
@@ -410,6 +412,7 @@ fn field_schema() -> Result<&'static crate::schema::Schema, Error> {
 /// # Errors
 ///
 /// `UNDECODABLE` for bytes that are not a datum of `axt.Field`.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn decode_description(bytes: &[u8]) -> Result<Value, Error> {
     field_schema()?
         .decode_datum(bytes)
@@ -1200,6 +1203,7 @@ pub(crate) fn check_value(
 ///
 /// The errors of [`crate::record_decoder::decode_record`], and `VALUE_INVALID` naming the
 /// first value that breaks a check.
+#[cfg(feature = "conformance")]
 pub(crate) fn check_record(
     description: &crate::type_description::TypeDescription,
     body: &[u8],
@@ -1539,6 +1543,7 @@ fn ecmascript_number(v: f64) -> String {
 
 // ---------------------------------------------------------------- describe
 
+#[cfg(any(test, feature = "conformance"))]
 fn shown_text(
     english: &str,
     translations: &BTreeMap<String, String>,
@@ -1557,6 +1562,7 @@ fn shown_text(
     }
 }
 
+#[cfg(any(test, feature = "conformance"))]
 fn shown(texts: &Texts, languages: &[String]) -> Map<String, Json> {
     let mut out = Map::new();
     out.insert(
@@ -1579,6 +1585,7 @@ fn shown(texts: &Texts, languages: &[String]) -> Map<String, Json> {
 }
 
 /// What a receiver shows of an object (metadata.md, sections 4 and 5).
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn describe_object(texts: &Texts, object: &Object, languages: &[String]) -> Json {
     let mut indexed: Vec<(usize, &Field)> = object.fields.iter().enumerate().collect();
     indexed.sort_by(|(ia, a), (ib, b)| match (a.order, b.order) {
@@ -1614,6 +1621,7 @@ pub(crate) fn describe_object(texts: &Texts, object: &Object, languages: &[Strin
 }
 
 /// What a receiver shows of a typed field.
+#[cfg(feature = "conformance")]
 pub(crate) fn describe_field(field: &Field, languages: &[String]) -> Json {
     let mut out = shown(&field.texts, languages);
     out.insert("brick".into(), json!(field.brick));
@@ -1648,6 +1656,7 @@ pub(crate) fn describe_field(field: &Field, languages: &[String]) -> Json {
 
 /// The typed field at `path`, the names from the root joined by `.`, going through the
 /// items of lists and maps of objects.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn field_at<'a>(root: &'a Field, path: &str) -> Option<&'a Field> {
     let mut current = root;
     for name in path.split('.') {

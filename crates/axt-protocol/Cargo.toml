@@ -14,19 +14,20 @@ authors.workspace = true
 [features]
 # The answers of the conformance adapter (AXT spec/conformance.md, section 6). Only the
 # crate axt-conformance-adapter turns it on; it is not part of the public API.
-conformance = ["dep:jiff"]
+conformance = ["dep:jiff", "dep:chacha20poly1305", "dep:hkdf"]
 
 [dependencies]
 apache-avro = "0.23.0"
 serde_json = "1.0.154"
 regex = "1.13.2"
 # Keys, signatures and sealing for the relay (spec/keys.md): Ed25519 with the strict
-# verification of section 2.3, X25519, and HPKE built from HKDF-SHA256 and ChaCha20-Poly1305.
+# verification of section 2.3, X25519, and HPKE built from HKDF-SHA256 and ChaCha20-Poly1305
+# (only the conformance adapter seals and opens messages so far).
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["fast", "zeroize"] }
 curve25519-dalek = { version = "5.0.0", default-features = false, features = ["alloc", "precomputed-tables", "zeroize"] }
 x25519-dalek = { version = "3.0.0", default-features = false, features = ["static_secrets", "zeroize", "precomputed-tables"] }
-chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
-hkdf = "0.13.0"
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"], optional = true }
+hkdf = { version = "0.13.0", optional = true }
 sha2 = "0.11.1"
 zeroize = "1.9.2"
 getrandom = "0.4.3"
@@ -36,6 +37,11 @@ miniz_oxide = "0.9.1"
 # Only for the conformance adapter: the zone rules of the IANA time zone database, bundled
 # into the binary so that every platform reads the same rules (spec/time.md, section 6).
 jiff = { version = "1.0.2", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
+
+[dev-dependencies]
+# The tests of the sealing, which run without the feature conformance as well.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+hkdf = "0.13.0"
 
 [lints]
 workspace = true

@@ -65,6 +65,7 @@ impl TypeDescription {
     }
 
     /// The typed field at the root of the description.
+    #[cfg(feature = "conformance")]
     pub(crate) fn root(&self) -> &Field {
         &self.root
     }

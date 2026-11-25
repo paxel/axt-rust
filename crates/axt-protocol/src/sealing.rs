@@ -5,45 +5,63 @@
 //! 4 and 5, describe: base mode, single-shot, the suite DHKEM(X25519, HKDF-SHA256),
 //! HKDF-SHA256 and ChaCha20-Poly1305.
 
+#[cfg(any(test, feature = "conformance"))]
 use chacha20poly1305::aead::{Aead, KeyInit};
+#[cfg(any(test, feature = "conformance"))]
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+#[cfg(any(test, feature = "conformance"))]
 use hkdf::{Hkdf, HkdfExtract};
+#[cfg(any(test, feature = "conformance"))]
 use sha2::Sha256;
+#[cfg(any(test, feature = "conformance"))]
 use x25519_dalek::{PublicKey, StaticSecret};
+#[cfg(any(test, feature = "conformance"))]
 use zeroize::Zeroizing;
 
+#[cfg(any(test, feature = "conformance"))]
 use crate::error::{Error, ErrorCode};
+#[cfg(any(test, feature = "conformance"))]
 use crate::keys::EncryptionSeed;
 
 /// The `info` of every sealed message.
+#[cfg(any(test, feature = "conformance"))]
 const INFO: &[u8] = b"AXT-v1 relay message";
 
 /// The suite of the KEM, DHKEM(X25519, HKDF-SHA256): `KEM` and the identifier 0x0020.
+#[cfg(any(test, feature = "conformance"))]
 const KEM_SUITE: &[u8] = b"KEM\x00\x20";
 
 /// The suite of HPKE: `HPKE`, the KEM 0x0020, HKDF-SHA256 0x0001, ChaCha20-Poly1305 0x0003.
+#[cfg(any(test, feature = "conformance"))]
 const HPKE_SUITE: &[u8] = b"HPKE\x00\x20\x00\x01\x00\x03";
 
 /// The version label of RFC 9180.
+#[cfg(any(test, feature = "conformance"))]
 const VERSION: &[u8] = b"HPKE-v1";
 
 /// The byte that names the construction of section 4.3.
+#[cfg(any(test, feature = "conformance"))]
 const SEALED_VERSION: u8 = 1;
 
 /// The length of the encapsulated key.
+#[cfg(any(test, feature = "conformance"))]
 const ENC_LENGTH: usize = 32;
 
 /// The length of the tag of ChaCha20-Poly1305.
+#[cfg(any(test, feature = "conformance"))]
 const TAG_LENGTH: usize = 16;
 
 /// The byte that ends a message inside its padding.
+#[cfg(any(test, feature = "conformance"))]
 const PADDING_MARK: u8 = 0x80;
 
 /// The smallest padded length.
+#[cfg(any(test, feature = "conformance"))]
 const MIN_PADDED: u64 = 1024;
 
 /// The padded length P(n) of a message of `length` bytes (section 4.4): max(1024,
 /// Padmé(n + 1)); `None` above the range of `u64`.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn padded_length(length: u64) -> Option<u64> {
     let x = length.checked_add(1)?;
     if x <= MIN_PADDED {
@@ -58,6 +76,7 @@ pub(crate) fn padded_length(length: u64) -> Option<u64> {
 
 /// `LabeledExtract` of RFC 9180, section 4, with HKDF-SHA256: the pseudorandom key, ready
 /// to expand.
+#[cfg(any(test, feature = "conformance"))]
 fn labeled_extract(suite: &[u8], salt: &[u8], label: &[u8], ikm: &[u8]) -> Hkdf<Sha256> {
     let mut extract = HkdfExtract::<Sha256>::new(Some(salt));
     for part in [VERSION, suite, label, ikm] {
@@ -68,6 +87,7 @@ fn labeled_extract(suite: &[u8], salt: &[u8], label: &[u8], ikm: &[u8]) -> Hkdf<
 
 /// `LabeledExpand` of RFC 9180, section 4, of `N` bytes; `None` only for a length HKDF
 /// cannot give, which no caller asks for.
+#[cfg(any(test, feature = "conformance"))]
 fn labeled_expand<const N: usize>(
     suite: &[u8],
     prk: &Hkdf<Sha256>,
@@ -83,6 +103,7 @@ fn labeled_expand<const N: usize>(
 
 /// The shared secret of the KEM for the X25519 output `dh` and the KEM context `enc`
 /// and the receiver's public key (RFC 9180, section 4.1, `ExtractAndExpand`).
+#[cfg(any(test, feature = "conformance"))]
 fn shared_secret(dh: &[u8], enc: &[u8; 32], receiver: &[u8; 32]) -> Option<Zeroizing<[u8; 32]>> {
     let prk = labeled_extract(KEM_SUITE, &[], b"eae_prk", dh);
     let kem_context = [enc.as_slice(), receiver.as_slice()].concat();
@@ -91,9 +112,11 @@ fn shared_secret(dh: &[u8], enc: &[u8; 32], receiver: &[u8; 32]) -> Option<Zeroi
 
 /// The AEAD key and base nonce of the base mode for `shared_secret` (RFC 9180, section
 /// 5.1, `KeySchedule`).
+#[cfg(any(test, feature = "conformance"))]
 type Schedule = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 12]>);
 
 /// `KeySchedule` of the base mode with the `info` of AXT.
+#[cfg(any(test, feature = "conformance"))]
 fn key_schedule(shared_secret: &[u8; 32]) -> Option<Schedule> {
     // The context is the mode, base = 0, and the hashes of the empty `psk_id` and of
     // the `info`, each the pseudorandom key of its extraction.
@@ -109,6 +132,7 @@ fn key_schedule(shared_secret: &[u8; 32]) -> Option<Schedule> {
 
 /// The bytes of `LabeledExtract` with an empty salt, for the hashes of the key schedule's
 /// context.
+#[cfg(any(test, feature = "conformance"))]
 fn prk_bytes(suite: &[u8], label: &[u8], ikm: &[u8]) -> [u8; 32] {
     let mut extract = HkdfExtract::<Sha256>::new(Some(&[]));
     for part in [VERSION, suite, label, ikm] {
@@ -132,6 +156,7 @@ pub(crate) fn is_small_order_encryption_key(encryption_key: &[u8]) -> bool {
 }
 
 /// A rejection of the encryption key.
+#[cfg(any(test, feature = "conformance"))]
 fn key_invalid(message: &str) -> Error {
     Error::axt(ErrorCode::EncryptionKeyInvalid, message)
 }
@@ -144,6 +169,7 @@ fn key_invalid(message: &str) -> Error {
 /// [`ErrorCode::EncryptionKeyInvalid`] for a key of small order, and also if the system
 /// gives no random bytes for the ephemeral key, or the message is beyond what the
 /// padding and the AEAD take.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn seal(message: &[u8], encryption_key: &[u8; 32]) -> Result<Vec<u8>, Error> {
     let mut ephemeral = Zeroizing::new([0; 32]);
     getrandom::fill(ephemeral.as_mut_slice())
@@ -156,6 +182,7 @@ pub(crate) fn seal(message: &[u8], encryption_key: &[u8; 32]) -> Result<Vec<u8>,
 }
 
 /// `message`, the byte `80` and as many zero bytes as bring it to its padded length.
+#[cfg(any(test, feature = "conformance"))]
 fn pad(message: &[u8]) -> Option<Vec<u8>> {
     let length = usize::try_from(padded_length(u64::try_from(message.len()).ok()?)?).ok()?;
     let mut padded = Vec::with_capacity(length);
@@ -167,6 +194,7 @@ fn pad(message: &[u8]) -> Option<Vec<u8>> {
 
 /// Encrypts `plaintext`, already padded, for `encryption_key` with HPKE and the ephemeral
 /// key `ephemeral`, and puts `01` and the encapsulated key in front.
+#[cfg(any(test, feature = "conformance"))]
 fn seal_with(
     plaintext: &[u8],
     encryption_key: &[u8; 32],
@@ -203,6 +231,7 @@ fn seal_with(
 /// [`ErrorCode::NotOpened`] when it does not begin with `01` or no key opens it, and
 /// [`ErrorCode::PaddingInvalid`] for a plaintext that does not end with `80` followed only
 /// by zero bytes.
+#[cfg(any(test, feature = "conformance"))]
 pub(crate) fn open(sealed: &[u8], private_keys: &[EncryptionSeed]) -> Result<Vec<u8>, Error> {
     let not_opened = |message: &str| Error::axt(ErrorCode::NotOpened, message);
     let Some((&SEALED_VERSION, rest)) = sealed.split_first() else {
