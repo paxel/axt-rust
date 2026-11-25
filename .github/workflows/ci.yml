@@ -27,6 +27,20 @@ jobs:
       # The library only: the generator's and the adapter's mains are no library code.
       coverage: rust -p axt-protocol
 
+  # The library as a dependency builds it: without the feature conformance, which the
+  # workspace's runs above turn on (--all-features, and the adapter in the workspace).
+  default-features:
+    name: clippy of axt-protocol with its default features
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Toolchain from rust-toolchain.toml
+        run: rustup toolchain install
+      - name: Clippy
+        run: cargo clippy --locked -p axt-protocol -- -D warnings
+
   sonar:
     needs: [rust]
     uses: paxel/gates/.github/workflows/sonar.yml@dbf6f6086174ef97fe465d3ffee31bf3985f5b81 # v1.4.1
